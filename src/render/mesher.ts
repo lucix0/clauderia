@@ -52,6 +52,10 @@ export const FACE_DIRS: ReadonlyArray<readonly [number, number, number]> = [
   [0, 0, -1],
 ];
 
+const DIR_X = Int8Array.from(FACE_DIRS, (d) => d[0]);
+const DIR_Y = Int8Array.from(FACE_DIRS, (d) => d[1]);
+const DIR_Z = Int8Array.from(FACE_DIRS, (d) => d[2]);
+
 /** Four corners per face, counter-clockwise seen from outside; uv (0,0),(1,0),(1,1),(0,1). */
 const FACE_VERTS: ReadonlyArray<readonly number[]> = [
   [1, 0, 1, 1, 0, 0, 1, 1, 0, 1, 1, 1], // +X
@@ -259,15 +263,33 @@ export function meshChunk(world: World, cx: number, cy: number, cz: number): Chu
   for (const b of buffers) b.reset();
 
   for (let y = y0; y < y1; y++) {
+    const yInterior = y > 0 && y < sy - 1;
     for (let z = z0; z < z1; z++) {
+      const zInterior = yInterior && z > 0 && z < sz - 1;
       let i = (y * sz + z) * sx + x0;
       for (let x = x0; x < x1; x++, i++) {
         const id = blocks[i]!;
         if (id === B.AIR) continue;
         const shape = SHAPE[id]!;
         if (shape === SHAPE_NONE) continue;
-        const buf = buffers[PASS[id]!]!;
+        const interior = zInterior && x > 0 && x < sx - 1;
+        const occludes = OCCLUDES[id] === 1;
 
+        // Fast reject for buried opaque cubes (the vast majority of cells).
+        if (
+          occludes &&
+          interior &&
+          OCCLUDES[blocks[i + 1]!] &&
+          OCCLUDES[blocks[i - 1]!] &&
+          OCCLUDES[blocks[i + layer]!] &&
+          OCCLUDES[blocks[i - layer]!] &&
+          OCCLUDES[blocks[i + sx]!] &&
+          OCCLUDES[blocks[i - sx]!]
+        ) {
+          continue;
+        }
+
+        const buf = buffers[PASS[id]!]!;
         if (shape === SHAPE_CROSS) {
           const lit = y > heights[z * sx + x]!;
           emitCross(buf, x, y, z, FACE_TILES[id * 6 + 2]!, SPRITE_BYTES[lit ? 0 : 1]!);
@@ -277,12 +299,14 @@ export function meshChunk(world: World, cx: number, cy: number, cz: number): Chu
         const fullBright = FULL_BRIGHT[id] === 1;
         const slab = shape === SHAPE_SLAB;
         for (let f = 0; f < 6; f++) {
-          const dir = FACE_DIRS[f]!;
-          const nx = x + dir[0];
-          const ny = y + dir[1];
-          const nz = z + dir[2];
-          const inside = nx >= 0 && ny >= 0 && nz >= 0 && nx < sx && ny < sy && nz < sz;
-          const nb = inside ? blocks[i + offsets[f]!]! : world.getVirtual(nx, ny, nz);
+          const nx = x + DIR_X[f]!;
+          const ny = y + DIR_Y[f]!;
+          const nz = z + DIR_Z[f]!;
+          let nb: number;
+          if (interior) nb = blocks[i + offsets[f]!]!;
+          else if (nx >= 0 && ny >= 0 && nz >= 0 && nx < sx && ny < sy && nz < sz) nb = blocks[i + offsets[f]!]!;
+          else nb = world.getVirtual(nx, ny, nz);
+          if (OCCLUDES[nb] && !(slab && f === 2)) continue;
           if (!faceVisible(id, shape, nb, f)) continue;
 
           let shade: number;

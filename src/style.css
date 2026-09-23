@@ -124,3 +124,41 @@ kbd {
   font-weight: 700;
   color: var(--ui-accent-2);
 }
+
+/* ---- Loading ---- */
+
+.loading {
+  background: radial-gradient(ellipse at center, #1c2a40 0%, #0b0f16 75%);
+}
+
+.loading-heading {
+  margin: 6px 0 14px;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--ui-text);
+}
+
+.loading-bar {
+  width: 320px;
+  max-width: 70vw;
+  height: 12px;
+  margin: 0 auto;
+  border: 1px solid var(--ui-border);
+  border-radius: 6px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.loading-bar-fill {
+  width: 0;
+  height: 100%;
+  background: linear-gradient(90deg, #4f9a33, #7fd1ff);
+  transition: width 0.12s linear;
+}
+
+.loading-stage {
+  min-height: 1.4em;
+  margin: 10px 0 0;
+  font-size: 13px;
+  color: var(--ui-muted);
+}
