@@ -19,6 +19,8 @@ export interface PaddedSection {
   tints: Uint8Array | null;
   /** Draw fluids at their level's height (Infinite worlds). */
   fluidLevels: boolean;
+  /** Smooth lighting and ambient occlusion. */
+  smooth: boolean;
   /** Section index (0–7) and column. */
   sy: number;
   cx: number;
@@ -26,5 +28,5 @@ export interface PaddedSection {
 }
 
 export function createPadded(): PaddedSection {
-  return { blocks: new Uint16Array(PAD_VOLUME), light: new Uint8Array(PAD_VOLUME), tints: null, fluidLevels: false, sy: 0, cx: 0, cz: 0 };
+  return { blocks: new Uint16Array(PAD_VOLUME), light: new Uint8Array(PAD_VOLUME), tints: null, fluidLevels: false, smooth: false, sy: 0, cx: 0, cz: 0 };
 }

@@ -26,6 +26,8 @@ export interface MeshInput {
   tints: Uint8Array | null;
   /** Draw fluids at their level's height (Infinite worlds). */
   fluidLevels: boolean;
+  /** Smooth lighting and ambient occlusion. */
+  smooth: boolean;
 }
 
 /** Full light array of a chunk (sky << 4 | block per cell), or null for full sky. */
@@ -52,7 +54,7 @@ export function colIndex(x: number, y: number, z: number): number {
 }
 
 /** Gather a column and its apron from the world. */
-export function buildMeshInput(world: World, chunk: Chunk, sections: number, light: LightReader): MeshInput {
+export function buildMeshInput(world: World, chunk: Chunk, sections: number, light: LightReader, smooth = false): MeshInput {
   const blocks = new Uint16Array(COL_VOLUME);
   const lightOut = new Uint8Array(COL_VOLUME);
   for (let dz = -1; dz <= 1; dz++) {
@@ -94,7 +96,7 @@ export function buildMeshInput(world: World, chunk: Chunk, sections: number, lig
     }
   }
   const tints = chunk.tints ? chunk.tints.slice() : null;
-  return { cx: chunk.cx, cz: chunk.cz, sections, blocks, light: lightOut, tints, fluidLevels: world.type === 'infinite' };
+  return { cx: chunk.cx, cz: chunk.cz, sections, blocks, light: lightOut, tints, fluidLevels: world.type === 'infinite', smooth };
 }
 
 /** Copy section `sy` (with its one-cell border) out of a mesh input. */
@@ -104,6 +106,7 @@ export function fillPaddedFromInput(out: PaddedSection, input: MeshInput, sy: nu
   out.cz = input.cz;
   out.tints = input.tints;
   out.fluidLevels = input.fluidLevels;
+  out.smooth = input.smooth;
   const y0 = sy * 16 - 1;
   for (let py = 0; py < PAD; py++) {
     const y = y0 + py;

@@ -185,6 +185,11 @@ export class Streamer {
     return n;
   }
 
+  /** Rebuild every column's mesh (e.g. a rendering setting changed). */
+  invalidateAll(): void {
+    for (const st of this.states.values()) st.meshed = false;
+  }
+
   /** Forget a column's mesh so it is rebuilt by the pool (e.g. after relighting). */
   invalidate(cx: number, cz: number): void {
     const st = this.states.get(chunkKey(cx, cz));
@@ -327,7 +332,7 @@ export class Streamer {
         sig = this.signature(chunk);
         chunk.dirtySections = 0;
         this.world.dirtyChunks.delete(chunk);
-        return { kind: 'mesh', input: buildMeshInput(this.world, chunk, chunk.nonEmpty, this.renderer.lightReader) };
+        return { kind: 'mesh', input: buildMeshInput(this.world, chunk, chunk.nonEmpty, this.renderer.lightReader, this.renderer.smooth) };
       },
       priority: () => this.priority(st.cx, st.cz, 0),
       onDone: (result) => {

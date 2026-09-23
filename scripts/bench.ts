@@ -49,7 +49,7 @@ export function run(): string[] {
   let quads = 0;
   const [, meshMs] = time(() => {
     for (const c of inner) {
-      const input = buildMeshInput(world, c, c.nonEmpty, (ch) => ch.light);
+      const input = buildMeshInput(world, c, c.nonEmpty, (ch) => ch.light, true); // smooth lighting, the default
       for (let sy = 0; sy < SECTIONS; sy++) {
         if (!(c.nonEmpty & (1 << sy))) continue;
         fillPaddedFromInput(pad, input, sy);

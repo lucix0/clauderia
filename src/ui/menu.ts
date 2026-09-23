@@ -33,6 +33,7 @@ export class PauseMenu {
   private readonly fovValue: HTMLElement;
   private readonly distance: HTMLSelectElement;
   private readonly invert: HTMLInputElement;
+  private readonly smooth: HTMLInputElement;
   private readonly lockDay: HTMLInputElement;
   private readonly info: HTMLElement;
   private current: PanelName = 'main';
@@ -57,8 +58,9 @@ export class PauseMenu {
       el('p', {
         className: 'hint',
         html:
-          '<kbd>WASD</kbd> move · <kbd>Space</kbd> jump / swim · <kbd>Z</kbd> fly · <kbd>R</kbd> respawn<br>' +
-          '<kbd>1</kbd>–<kbd>9</kbd> hotbar · <kbd>B</kbd> blocks · <kbd>F</kbd> view distance · <kbd>F3</kbd> debug',
+          '<kbd>WASD</kbd> move (double-tap <kbd>W</kbd> sprint) · <kbd>Space</kbd> jump / swim · <kbd>Shift</kbd> sneak<br>' +
+          '<kbd>E</kbd> inventory · <kbd>Q</kbd> drop · <kbd>1</kbd>–<kbd>9</kbd> hotbar · <kbd>/</kbd> commands · <kbd>F</kbd> view distance · <kbd>F3</kbd> debug<br>' +
+          'Creative: <kbd>Z</kbd> fly · <kbd>R</kbd> respawn',
       }),
     ]);
 
@@ -71,7 +73,8 @@ export class PauseMenu {
       this.distance.append(el('option', { text: `${d} chunks (${d * 16} blocks)`, attrs: { value: String(d) } }));
     }
     this.invert = el('input', { attrs: { id: 'set-invert', type: 'checkbox' } });
-    for (const input of [this.sens, this.fov, this.distance, this.invert]) {
+    this.smooth = el('input', { attrs: { id: 'set-smooth', type: 'checkbox' } });
+    for (const input of [this.sens, this.fov, this.distance, this.invert, this.smooth]) {
       input.addEventListener('input', () => this.emitSettings());
       input.addEventListener('change', () => this.emitSettings());
     }
@@ -87,6 +90,7 @@ export class PauseMenu {
       el('label', { className: 'form-row', attrs: { for: 'set-fov' } }, [el('span', { text: 'Field of view' }), this.fov, this.fovValue]),
       el('label', { className: 'form-row', attrs: { for: 'set-dist' } }, [el('span', { text: 'Render distance' }), this.distance]),
       el('label', { className: 'form-row', attrs: { for: 'set-invert' } }, [el('span', { text: 'Invert mouse Y' }), this.invert]),
+      el('label', { className: 'form-row', attrs: { for: 'set-smooth' } }, [el('span', { text: 'Smooth lighting' }), this.smooth]),
       el('label', { className: 'form-row', attrs: { for: 'set-lockday' } }, [
         el('span', { text: 'Lock daytime (this world)' }),
         this.lockDay,
@@ -146,6 +150,7 @@ export class PauseMenu {
     this.fovValue.textContent = `${s.fov}°`;
     this.distance.value = String(s.renderDistance);
     this.invert.checked = s.invertY;
+    this.smooth.checked = s.smoothLighting;
   }
 
   private showPanel(name: PanelName): void {
@@ -159,6 +164,7 @@ export class PauseMenu {
       fov: Number(this.fov.value),
       renderDistance: Number(this.distance.value),
       invertY: this.invert.checked,
+      smoothLighting: this.smooth.checked,
     };
     this.sensValue.textContent = `${s.sensitivity.toFixed(2)}×`;
     this.fovValue.textContent = `${s.fov}°`;

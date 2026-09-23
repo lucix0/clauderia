@@ -8,6 +8,8 @@ export interface Settings {
   /** Render distance in chunks (4–16). */
   renderDistance: number;
   invertY: boolean;
+  /** Smooth lighting with ambient occlusion. */
+  smoothLighting: boolean;
 }
 
 export const DEFAULT_SETTINGS: Readonly<Settings> = {
@@ -15,6 +17,7 @@ export const DEFAULT_SETTINGS: Readonly<Settings> = {
   fov: 70,
   renderDistance: DEFAULT_RENDER_DISTANCE,
   invertY: false,
+  smoothLighting: true,
 };
 
 const KEY = 'blocktide.settings.v2';
@@ -33,6 +36,7 @@ export function sanitizeSettings(raw: unknown): Settings {
       clampNumber(r['renderDistance'], MIN_RENDER_DISTANCE, MAX_RENDER_DISTANCE, DEFAULT_SETTINGS.renderDistance),
     ),
     invertY: typeof r['invertY'] === 'boolean' ? r['invertY'] : DEFAULT_SETTINGS.invertY,
+    smoothLighting: typeof r['smoothLighting'] === 'boolean' ? r['smoothLighting'] : DEFAULT_SETTINGS.smoothLighting,
   };
 }
 

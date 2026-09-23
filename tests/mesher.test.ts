@@ -2,6 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { faceVisible } from '../src/render/mesher';
 import { B, PASS_CUTOUT, PASS_OPAQUE, PASS_TRANSLUCENT, SHAPE_CUBE } from '../src/world/blocks';
 import type { World } from '../src/world/world';
+import { buildMeshInput, fillPaddedFromInput } from '../src/render/meshInput';
+import { meshSection } from '../src/render/mesher';
+import { createPadded } from '../src/render/padded';
 import { classicWorld, lightWorld, meshAt } from './helpers';
 
 function quads(world: World, cx = 0, sy = 0, cz = 0): number[] {
@@ -169,5 +172,26 @@ describe('mesher culling', () => {
     let minX = 99;
     for (let i = 0; i < m.positions.length; i += 3) minX = Math.min(minX, m.positions[i]!);
     expect(minX).toBeCloseTo(10 + 1 / 16);
+  });
+
+  it('shades corners next to walls with smooth lighting (ambient occlusion)', () => {
+    const w = worldWith([[10, 9, 10, B.STONE], [10, 10, 11, B.STONE], [11, 10, 10, B.STONE], [11, 10, 11, B.STONE]]);
+    lightWorld(w);
+    const chunk = w.getChunk(0, 0)!;
+    const pad = createPadded();
+    fillPaddedFromInput(pad, buildMeshInput(w, chunk, 1, (c) => c.light, true), 0);
+    const m = meshSection(pad)[PASS_OPAQUE]!;
+    // The top face of the floor block: its corner under the three walls is darkest.
+    let top = -1;
+    for (let q = 0; q < m.quads; q++) {
+      const ys = [1, 4, 7, 10].map((k) => m.positions[q * 12 + k]!);
+      const xs = [0, 3, 6, 9].map((k) => m.positions[q * 12 + k]!);
+      if (ys.every((y) => y === 10) && xs.every((x) => x >= 10 && x <= 11)) top = q;
+    }
+    expect(top).toBeGreaterThanOrEqual(0);
+    const shades = [0, 1, 2, 3].map((k) => m.colors[top * 12 + k * 3]!);
+    expect(Math.min(...shades)).toBeLessThan(Math.max(...shades));
+    const flat = meshAt(w, 0, 0, 0)[PASS_OPAQUE]!;
+    expect(new Set(Array.from(flat.colors.slice(0, 12))).size).toBe(1); // flat lighting: one shade per face
   });
 });

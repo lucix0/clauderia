@@ -35,6 +35,8 @@ export class ChunkRenderer {
   private readonly padded = createPadded();
   /** How cell light is read when building mesh inputs. */
   lightReader: LightReader = (chunk) => chunk.light;
+  /** Smooth lighting and ambient occlusion (a setting). */
+  smooth = true;
 
   constructor(private readonly materials: readonly THREE.Material[]) {
     this.group.name = 'chunks';
@@ -128,7 +130,7 @@ export class ChunkRenderer {
     chunk.dirtySections = 0;
     world.dirtyChunks.delete(chunk);
     if (!mask || !this.columns.has(chunk.key)) return 0;
-    const input = buildMeshInput(world, chunk, mask & chunk.nonEmpty, this.lightReader);
+    const input = buildMeshInput(world, chunk, mask & chunk.nonEmpty, this.lightReader, this.smooth);
     const col = this.column(chunk);
     let built = 0;
     for (let sy = 0; sy < SECTIONS; sy++) {

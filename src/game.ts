@@ -757,7 +757,10 @@ export class Game {
   // ---- Settings ----
 
   applySettings(s: Settings): void {
+    const smoothChanged = this.settings.smoothLighting !== s.smoothLighting;
     this.settings = sanitizeSettings(s);
+    this.chunks.smooth = this.settings.smoothLighting;
+    if (smoothChanged) this.streamer?.invalidateAll();
     this.camera.fov = this.settings.fov;
     this.camera.updateProjectionMatrix();
     if (this.streamer) this.streamer.radius = this.settings.renderDistance;

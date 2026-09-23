@@ -272,6 +272,96 @@ function emitFace(
   }
 }
 
+/** Brightness per ambient-occlusion level (0 = both sides blocked … 3 = open), linear. */
+const AO_LINEAR = [0.5, 0.68, 0.84, 1].map((v) => Math.pow(v, 2.2));
+
+/** For each face, the two in-plane axes (0 x, 1 y, 2 z). */
+const FACE_AXES: ReadonlyArray<readonly [number, number]> = [
+  [1, 2],
+  [1, 2],
+  [0, 2],
+  [0, 2],
+  [0, 1],
+  [0, 1],
+];
+const AXIS_STEP = [1, PAD * PAD, PAD];
+
+// Scratch per-corner values.
+const cornerSky = new Float32Array(4);
+const cornerBlock = new Float32Array(4);
+const cornerAO = new Uint8Array(4);
+
+/**
+ * A full-height cube face with smooth lighting: each corner averages the
+ * light of the four cells around it in front of the face, and darkens by
+ * how many of those are solid (ambient occlusion).
+ */
+function emitSmoothFace(
+  buf: QuadBuffer,
+  face: number,
+  x: number,
+  y: number,
+  z: number,
+  tile: number,
+  shade: number,
+  front: number,
+  blocks: Uint16Array,
+  light: Uint8Array,
+  rotate: boolean,
+): void {
+  const verts = FACE_VERTS[face]!;
+  const [a1, a2] = FACE_AXES[face]!;
+  const s1 = AXIS_STEP[a1]!;
+  const s2 = AXIS_STEP[a2]!;
+  const fl = light[front]!;
+  const fSky = fl >> 4;
+  const fBlock = fl & 15;
+  for (let c = 0; c < 4; c++) {
+    const d1 = verts[c * 3 + a1]! ? s1 : -s1;
+    const d2 = verts[c * 3 + a2]! ? s2 : -s2;
+    const i1 = front + d1;
+    const i2 = front + d2;
+    const ic = front + d1 + d2;
+    const o1 = OCCLUDES[blocks[i1]! & 0xff]!;
+    const o2 = OCCLUDES[blocks[i2]! & 0xff]!;
+    // A corner hidden behind both sides doesn't count.
+    const oc = o1 && o2 ? 1 : OCCLUDES[blocks[ic]! & 0xff]!;
+    const l1 = o1 ? fl : light[i1]!;
+    const l2 = o2 ? fl : light[i2]!;
+    const lc = oc ? fl : light[ic]!;
+    cornerSky[c] = (fSky + (l1 >> 4) + (l2 >> 4) + (lc >> 4)) / 4;
+    cornerBlock[c] = (fBlock + (l1 & 15) + (l2 & 15) + (lc & 15)) / 4;
+    cornerAO[c] = o1 && o2 ? 0 : 3 - o1 - o2 - oc;
+  }
+  // Split the quad along the diagonal that keeps the shading smooth.
+  const flip = cornerAO[0]! + cornerAO[2]! < cornerAO[1]! + cornerAO[3]!;
+  buf.reserve();
+  const q = buf.quads++;
+  buf.light(q, fl); // sets the tint; light is overwritten per vertex below
+  const u0 = TILE_UVS[tile * 4]!;
+  const v0 = TILE_UVS[tile * 4 + 1]!;
+  const u1 = TILE_UVS[tile * 4 + 2]!;
+  const v1 = TILE_UVS[tile * 4 + 3]!;
+  const turn = rotate ? 1 : 0;
+  for (let k = 0; k < 4; k++) {
+    const c = flip ? (k + 1) & 3 : k;
+    const p = q * 12 + k * 3;
+    buf.pos[p] = x + verts[c * 3]!;
+    buf.pos[p + 1] = y + verts[c * 3 + 1]!;
+    buf.pos[p + 2] = z + verts[c * 3 + 2]!;
+    const t = q * 8 + k * 2;
+    const uvc = (c + turn) & 3;
+    buf.uv[t] = CORNER_U[uvc] ? u1 : u0;
+    buf.uv[t + 1] = CORNER_V[uvc] ? v1 : v0;
+    const col = Math.round(shade * AO_LINEAR[cornerAO[c]!]!);
+    buf.col[p] = col;
+    buf.col[p + 1] = col;
+    buf.col[p + 2] = col;
+    buf.sky[q * 4 + k] = Math.round(cornerSky[c]! * 17);
+    buf.blk[q * 4 + k] = Math.round(cornerBlock[c]! * 17);
+  }
+}
+
 const CACTUS_INSET = 1 / 16;
 
 /**
@@ -556,7 +646,11 @@ export function meshSection(pad: PaddedSection): ChunkMeshData {
           } else if (front >= 0 && f !== 2 && f !== 3) {
             tile = f === front ? frontTile(id, value >> 8) : FACE_TILES[id * 6]!;
           }
-          emitFace(buf, f, x, y, z, tile, fullBright ? FULL_BYTE : FACE_BYTES[f]!, lightHere, top, rotate);
+          if (pad.smooth && top === 1 && !fullBright && !liquid) {
+            emitSmoothFace(buf, f, x, y, z, tile, FACE_BYTES[f]!, ni, blocks, light, rotate);
+          } else {
+            emitFace(buf, f, x, y, z, tile, fullBright ? FULL_BYTE : FACE_BYTES[f]!, lightHere, top, rotate);
+          }
         }
       }
     }
