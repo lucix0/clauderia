@@ -10,6 +10,8 @@ export interface Settings {
   invertY: boolean;
   /** Smooth lighting with ambient occlusion. */
   smoothLighting: boolean;
+  /** Sound volume, 0–1. */
+  volume: number;
 }
 
 export const DEFAULT_SETTINGS: Readonly<Settings> = {
@@ -18,6 +20,7 @@ export const DEFAULT_SETTINGS: Readonly<Settings> = {
   renderDistance: DEFAULT_RENDER_DISTANCE,
   invertY: false,
   smoothLighting: true,
+  volume: 0.7,
 };
 
 const KEY = 'blocktide.settings.v2';
@@ -37,6 +40,7 @@ export function sanitizeSettings(raw: unknown): Settings {
     ),
     invertY: typeof r['invertY'] === 'boolean' ? r['invertY'] : DEFAULT_SETTINGS.invertY,
     smoothLighting: typeof r['smoothLighting'] === 'boolean' ? r['smoothLighting'] : DEFAULT_SETTINGS.smoothLighting,
+    volume: clampNumber(r['volume'], 0, 1, DEFAULT_SETTINGS.volume),
   };
 }
 

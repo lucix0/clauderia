@@ -16,8 +16,9 @@ import { CommandBar } from './ui/commandBar';
 import { WorkerPool } from './workers/pool';
 import { ItemEntities, loadItems, saveItem } from './entities/items';
 import { ItemRenderer } from './entities/itemRender';
-import { animalGroup, MOB_KINDS, Mobs, type MobKind, type MobTarget, type MobWorld } from './entities/mobs';
+import { animalGroup, MOB_KINDS, Mobs, type Mob, type MobKind, type MobTarget, type MobWorld } from './entities/mobs';
 import { createMobAtlas, MobRenderer } from './entities/mobRender';
+import { Sound } from './audio/sound';
 import { Container, type ContainerExtras, type Section } from './items/container';
 import { fuelTicks, furnaceSlotFor, SMELT_TICKS } from './items/smelting';
 import { HOTBAR_SLOTS, wearTool, type ItemStack } from './items/inventory';
@@ -144,6 +145,7 @@ export class Game {
   readonly crack: CrackOverlay;
   readonly containerView: ContainerView;
   readonly deathScreen: DeathScreen;
+  readonly sound = new Sound();
   /** The open container screen's contents (inventory / crafting table). */
   container: Container | null = null;
   state: GameState = 'loading';
@@ -170,6 +172,12 @@ export class Game {
   private hurtShake = 0;
   private sneakDrop = 0;
   private fovKick = 0;
+  /** Footstep bookkeeping: distance walked since the last step, highest point of the current fall. */
+  private stepDistance = 0;
+  private airPeak = 0;
+  private digTimer = 0;
+  private eatTimer = 0;
+  private lastPickupSound = 0;
   private openContainerOnUnlock: (() => void) | null = null;
   private pendingSpawn = false;
   private placeOnSpawn = false;
@@ -203,8 +211,13 @@ export class Game {
     this.scene.add(this.itemRenderer.group);
     this.mobRenderer = new MobRenderer(createEntityMaterial(createMobAtlas(), 'mob'));
     this.scene.add(this.mobRenderer.group);
-    this.mobs.events.died = (mob, loot) => {
-      for (const st of loot) this.items.spawn(st, mob.body.x, mob.body.y + 0.5, mob.body.z, (Math.random() - 0.5) * 2, 3, (Math.random() - 0.5) * 2, 0.5);
+    this.mobs.events = {
+      died: (mob, loot) => {
+        for (const st of loot) this.items.spawn(st, mob.body.x, mob.body.y + 0.5, mob.body.z, (Math.random() - 0.5) * 2, 3, (Math.random() - 0.5) * 2, 0.5);
+      },
+      hurt: (mob) => this.sound.mob(mob.def.kind, mobVoiceAt(mob), mob.health <= 0 ? 'death' : 'hurt'),
+      shot: (mob) => this.sound.bow(mobVoiceAt(mob)),
+      arrowStuck: (x, y, z) => this.sound.arrowHit({ x, y, z }),
     };
     this.crack = new CrackOverlay(this.atlas.texture);
     this.scene.add(this.crack.object);
@@ -234,11 +247,17 @@ export class Game {
       hurt: () => {
         this.hud.hurt();
         this.hurtShake = 1;
+        this.sound.hurt();
       },
       died: (cause) => this.onDeath(cause),
       inventory: () => this.hud.render(this.survivor.inventory, this.survivor.selected),
     };
-    this.items.onCollect = () => this.hud.render(this.survivor.inventory, this.survivor.selected);
+    this.items.onCollect = () => {
+      this.hud.render(this.survivor.inventory, this.survivor.selected);
+      const now = performance.now();
+      if (now - this.lastPickupSound > 60) this.sound.pickup();
+      this.lastPickupSound = now;
+    };
 
     this.titleOverlay = el('div', { className: 'overlay click-to-play hidden' }, [
       el('div', { className: 'panel' }, [
@@ -683,6 +702,8 @@ export class Game {
   }
 
   resume(): void {
+    // Every way back into the game is a click or key press: start audio here.
+    this.sound.unlock();
     if (this.state === 'loading' || this.state === 'menu' || this.state === 'dead' || !this.world) return;
     this.picker.close();
     if (this.container) this.closeContainer(false);
@@ -764,6 +785,7 @@ export class Game {
     const smoothChanged = this.settings.smoothLighting !== s.smoothLighting;
     this.settings = sanitizeSettings(s);
     this.chunks.smooth = this.settings.smoothLighting;
+    this.sound.setVolume(this.settings.volume);
     if (smoothChanged) this.streamer?.invalidateAll();
     this.camera.fov = this.settings.fov;
     this.camera.updateProjectionMatrix();
@@ -869,6 +891,7 @@ export class Game {
       const value = world.get(hit.x, hit.y, hit.z);
       if (value >> 8 !== 0) return; // only sources
       world.setBlock(hit.x, hit.y, hit.z, B.AIR);
+      this.sound.splash(centre(hit), false);
       this.chunks.rebuildAt(hit.x, hit.y, hit.z);
       const filled: ItemStack = { id: hit.id === B.WATER ? I.WATER_BUCKET : I.LAVA_BUCKET, count: 1, damage: 0 };
       if (surv.survival && held.count === 1) surv.inventory[surv.selected] = filled;
@@ -887,6 +910,7 @@ export class Game {
     const cur = world.getId(cell.x, cell.y, cell.z);
     if (cur !== B.AIR && !REPLACEABLE[cur] && !IS_LIQUID[cur]) return;
     if (!world.setBlock(cell.x, cell.y, cell.z, held.id === I.WATER_BUCKET ? B.WATER : B.LAVA)) return;
+    this.sound.splash(centre(cell), false);
     this.edited(cell);
     if (surv.survival) {
       surv.inventory[surv.selected] = { id: I.BUCKET, count: 1, damage: 0 };
@@ -1146,9 +1170,9 @@ export class Game {
     if (!world || surv.dead) return;
     if (button === BUTTON_LEFT) {
       if (!hit) return;
-      if (surv.survival) {
-        if (surv.harvest(world, this.items, hit, world.get(hit.x, hit.y, hit.z))) this.edited(hit);
-      } else if (breakBlock(world, hit.x, hit.y, hit.z)) {
+      const value = world.get(hit.x, hit.y, hit.z);
+      if (surv.survival ? surv.harvest(world, this.items, hit, value) : breakBlock(world, hit.x, hit.y, hit.z)) {
+        this.sound.breakBlock(idOf(value), centre(hit));
         this.edited(hit);
       }
     } else if (button === BUTTON_RIGHT) {
@@ -1177,6 +1201,7 @@ export class Game {
       const changed = placeBlock(world, cell, value, (c, h) => bodyOverlapsCell(this.player.body, c.x, c.y, c.z, h));
       if (changed) {
         surv.consumeHeld();
+        this.sound.place(id, centre(changed));
         this.edited(changed);
       }
     } else if (button === BUTTON_MIDDLE) {
@@ -1198,6 +1223,7 @@ export class Game {
     const def = held ? itemDef(held.id) : undefined;
     const damage = def?.attack ?? 1;
     const b = this.player.body;
+    this.sound.swing();
     if (this.mobs.hit(t.mob, damage, b.x, b.z) && surv.survival) {
       exhaustPlayer(surv, 0.1);
       if (def?.tool) {
@@ -1316,6 +1342,7 @@ export class Game {
       pl.prevZ + (b.z - pl.prevZ) * alpha,
     );
     this.camera.rotation.set(pl.pitch, pl.yaw, Math.sin(this.hurtShake * 9) * this.hurtShake * 0.06);
+    this.sound.setListener({ x: this.camera.position.x, y: this.camera.position.y, z: this.camera.position.z, yaw: pl.yaw });
     const fov = this.settings.fov * (1 + this.fovKick * 0.1);
     if (Math.abs(this.camera.fov - fov) > 0.01) this.camera.fov = fov;
 
@@ -1334,10 +1361,31 @@ export class Game {
     }
     if (world && surv.survival) {
       const attacking = playing && this.input.locked && this.input.isButtonHeld(BUTTON_LEFT);
+      const aimed = attacking && this.target ? world.get(this.target.x, this.target.y, this.target.z) : B.AIR;
       const broke = surv.updateMining(world, this.items, attacking ? this.target : null, attacking, dt);
-      if (broke) this.edited(broke);
+      if (broke) {
+        this.sound.breakBlock(idOf(aimed), centre(broke));
+        this.edited(broke);
+      } else if (surv.mining) {
+        this.digTimer -= dt;
+        if (this.digTimer <= 0) {
+          this.sound.dig(idOf(aimed), centre(surv.mining));
+          this.digTimer = 0.22;
+        }
+      } else {
+        this.digTimer = 0;
+      }
       const using = playing && this.input.locked && this.input.isButtonHeld(BUTTON_RIGHT);
       if (surv.updateEating(using, dt)) this.hud.flash('Yum!');
+      if (surv.eating) {
+        this.eatTimer -= dt;
+        if (this.eatTimer <= 0) {
+          this.sound.eat();
+          this.eatTimer = 0.24;
+        }
+      } else {
+        this.eatTimer = 0;
+      }
     } else {
       surv.mining = null;
     }
@@ -1393,6 +1441,8 @@ export class Game {
     surv.updateSprint(forward > 0, b);
     const jump = key('Space');
     const wasGrounded = b.onGround;
+    const wasLiquid = b.liquid;
+    const fallSpeed = b.vy;
     const px = b.x;
     const py = b.y;
     const pz = b.z;
@@ -1409,6 +1459,7 @@ export class Game {
       dt,
     );
     surv.afterMove(b, px, py, pz, jump && wasGrounded && b.vy > 0);
+    this.movementSounds(world, px, pz, wasGrounded, wasLiquid, fallSpeed);
     if (b.y < -32 && !surv.survival) this.player.respawn();
     const eyeY = b.y + PLAYER_EYE - this.sneakDrop;
     this.items.update(
@@ -1447,6 +1498,7 @@ export class Game {
       this.session.ticker.step();
       surv.tick(world, b, eyeY);
       if (mw) this.mobs.spawnTick(mw, b, 1 / 20, surv.difficulty !== 'peaceful');
+      this.mobVoices();
       this.blockEntities.tick(
         (x, z) => world.isActive(x, z),
         (x, y, z, on) => {
@@ -1457,6 +1509,43 @@ export class Game {
       );
       // Keep an open furnace's gauges moving.
       if (this.container && this.stepCount % (STEPS_PER_TICK * 4) === 0) this.containerView.render();
+    }
+  }
+
+  /** Footsteps, landings and splashes for the player's last physics step. */
+  private movementSounds(world: World, px: number, pz: number, wasGrounded: boolean, wasLiquid: number, fallSpeed: number): void {
+    const b = this.player.body;
+    if (!b.onGround) this.airPeak = wasGrounded ? b.y : Math.max(this.airPeak, b.y);
+    if (!this.sound.ready || b.flying) return;
+    const feet = { x: b.x, y: b.y, z: b.z };
+    const fx = Math.floor(b.x);
+    const fz = Math.floor(b.z);
+    // A snow layer is walked on from inside its cell; everything else from above.
+    const inside = world.getId(fx, Math.floor(b.y), fz);
+    const ground = inside === B.SNOW_LAYER ? inside : world.getId(fx, Math.floor(b.y - 0.05), fz);
+    if (b.liquid === 1 && !wasLiquid) this.sound.splash(feet, fallSpeed < -10);
+    if (b.onGround && !wasGrounded) {
+      const drop = this.airPeak - b.y;
+      if (!b.liquid && ground !== B.AIR) {
+        if (drop > 3) this.sound.land(ground, feet, drop);
+        else this.sound.step(ground, feet, this.survivor.sneaking);
+      }
+      this.stepDistance = 0;
+      return;
+    }
+    if (!b.onGround || b.liquid) return;
+    this.stepDistance += Math.hypot(b.x - px, b.z - pz);
+    if (this.stepDistance < 1.7) return;
+    this.stepDistance = 0;
+    if (ground !== B.AIR) this.sound.step(ground, feet, this.survivor.sneaking);
+  }
+
+  /** Nearby mobs grunt, moo and hiss now and then. */
+  private mobVoices(): void {
+    if (!this.sound.ready) return;
+    for (const m of this.mobs.list) {
+      if (m.removed || m.dying >= 0) continue;
+      if (Math.random() < (m.def.hostile ? 1 / 140 : 1 / 220)) this.sound.mob(m.def.kind, mobVoiceAt(m), 'idle');
     }
   }
 
@@ -1560,6 +1649,16 @@ export function debugViewpoint(world: World, spawn: { x: number; z: number }): V
 
 function exhaustPlayer(surv: Survivor, amount: number): void {
   exhaust(surv.vitals, amount);
+}
+
+/** Centre of a block cell (where its sounds come from). */
+function centre(c: { x: number; y: number; z: number }): { x: number; y: number; z: number } {
+  return { x: c.x + 0.5, y: c.y + 0.5, z: c.z + 0.5 };
+}
+
+/** Where a mob's voice comes from: its head, roughly. */
+function mobVoiceAt(m: Mob): { x: number; y: number; z: number } {
+  return { x: m.body.x, y: m.body.y + m.body.height * 0.8, z: m.body.z };
 }
 
 /** Feet height for standing on the highest solid ground of a column. */

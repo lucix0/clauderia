@@ -34,6 +34,8 @@ export class PauseMenu {
   private readonly distance: HTMLSelectElement;
   private readonly invert: HTMLInputElement;
   private readonly smooth: HTMLInputElement;
+  private readonly volume: HTMLInputElement;
+  private readonly volumeValue: HTMLElement;
   private readonly lockDay: HTMLInputElement;
   private readonly info: HTMLElement;
   private current: PanelName = 'main';
@@ -74,7 +76,9 @@ export class PauseMenu {
     }
     this.invert = el('input', { attrs: { id: 'set-invert', type: 'checkbox' } });
     this.smooth = el('input', { attrs: { id: 'set-smooth', type: 'checkbox' } });
-    for (const input of [this.sens, this.fov, this.distance, this.invert, this.smooth]) {
+    this.volume = el('input', { attrs: { id: 'set-volume', type: 'range', min: '0', max: '1', step: '0.05' } });
+    this.volumeValue = el('span', { className: 'value' });
+    for (const input of [this.sens, this.fov, this.distance, this.invert, this.smooth, this.volume]) {
       input.addEventListener('input', () => this.emitSettings());
       input.addEventListener('change', () => this.emitSettings());
     }
@@ -91,6 +95,7 @@ export class PauseMenu {
       el('label', { className: 'form-row', attrs: { for: 'set-dist' } }, [el('span', { text: 'Render distance' }), this.distance]),
       el('label', { className: 'form-row', attrs: { for: 'set-invert' } }, [el('span', { text: 'Invert mouse Y' }), this.invert]),
       el('label', { className: 'form-row', attrs: { for: 'set-smooth' } }, [el('span', { text: 'Smooth lighting' }), this.smooth]),
+      el('label', { className: 'form-row', attrs: { for: 'set-volume' } }, [el('span', { text: 'Sound volume' }), this.volume, this.volumeValue]),
       el('label', { className: 'form-row', attrs: { for: 'set-lockday' } }, [
         el('span', { text: 'Lock daytime (this world)' }),
         this.lockDay,
@@ -151,6 +156,8 @@ export class PauseMenu {
     this.distance.value = String(s.renderDistance);
     this.invert.checked = s.invertY;
     this.smooth.checked = s.smoothLighting;
+    this.volume.value = String(s.volume);
+    this.volumeValue.textContent = `${Math.round(s.volume * 100)}%`;
   }
 
   private showPanel(name: PanelName): void {
@@ -165,9 +172,11 @@ export class PauseMenu {
       renderDistance: Number(this.distance.value),
       invertY: this.invert.checked,
       smoothLighting: this.smooth.checked,
+      volume: Number(this.volume.value),
     };
     this.sensValue.textContent = `${s.sensitivity.toFixed(2)}×`;
     this.fovValue.textContent = `${s.fov}°`;
+    this.volumeValue.textContent = `${Math.round(s.volume * 100)}%`;
     this.actions.settingsChanged(s);
   }
 }

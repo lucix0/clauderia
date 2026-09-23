@@ -138,6 +138,12 @@ export interface MobTarget {
 export interface MobEvents {
   /** A mob finished dying: drop its loot. */
   died(mob: Mob, loot: ItemStack[]): void;
+  /** A mob took damage (health may now be 0). */
+  hurt?(mob: Mob): void;
+  /** A skeleton loosed an arrow. */
+  shot?(mob: Mob): void;
+  /** An arrow stuck into a block at (x, y, z). */
+  arrowStuck?(x: number, y: number, z: number): void;
 }
 
 const THINK_INTERVAL = 0.1;
@@ -224,6 +230,7 @@ export class Mobs {
       mob.targetZ = mob.body.z + (dz / d) * 10;
     }
     if (mob.health <= 0) mob.dying = 0;
+    this.events.hurt?.(mob);
     return true;
   }
 
@@ -499,6 +506,7 @@ export class Mobs {
     m.health -= amount;
     m.hurt = 0.5;
     if (m.health <= 0) m.dying = 0;
+    this.events.hurt?.(m);
   }
 
   // ---- Arrows ----
@@ -532,6 +540,7 @@ export class Mobs {
       age: 0,
       removed: false,
     });
+    this.events.shot?.(m);
   }
 
   private updateArrows(world: MobWorld, dt: number, player: MobTarget | null): void {
@@ -559,6 +568,7 @@ export class Mobs {
         a.z += (a.vz * dt) / steps;
         if (world.solidHeight(Math.floor(a.x), Math.floor(a.y), Math.floor(a.z)) > a.y - Math.floor(a.y)) {
           a.stuck = 8;
+          this.events.arrowStuck?.(a.x, a.y, a.z);
           break;
         }
         if (player?.attackable && Math.abs(a.x - player.x) < 0.4 && Math.abs(a.z - player.z) < 0.4 && a.y > player.y && a.y < player.y + 1.8) {
