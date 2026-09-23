@@ -35,9 +35,9 @@ export function renderStackInto(slot: HTMLElement, s: ItemStack | null, icons: I
   if (img.getAttribute('src') !== src) img.src = src;
   img.style.visibility = 'visible';
   count.textContent = s.count > 1 ? String(s.count) : '';
-  const tool = itemDef(s.id)?.tool;
-  if (tool && s.damage > 0) {
-    const left = 1 - s.damage / tool.durability;
+  const durability = itemDef(s.id)?.durability ?? 0;
+  if (durability > 0 && s.damage > 0) {
+    const left = 1 - s.damage / durability;
     bar.style.display = 'block';
     const fill = bar.firstElementChild as HTMLElement;
     fill.style.width = `${Math.max(0, left) * 100}%`;

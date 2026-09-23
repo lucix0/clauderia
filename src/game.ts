@@ -19,6 +19,7 @@ import { ItemRenderer } from './entities/itemRender';
 import { animalGroup, MOB_KINDS, Mobs, type Mob, type MobKind, type MobTarget, type MobWorld } from './entities/mobs';
 import { createMobAtlas, MobRenderer } from './entities/mobRender';
 import { Sound } from './audio/sound';
+import { arrowDamage, arrowSpeed, bowPower } from './survival/bow';
 import { Container, type ContainerExtras, type Section } from './items/container';
 import { fuelTicks, furnaceSlotFor, SMELT_TICKS } from './items/smelting';
 import { HOTBAR_SLOTS, wearTool, type ItemStack } from './items/inventory';
@@ -172,6 +173,7 @@ export class Game {
   private hurtShake = 0;
   private sneakDrop = 0;
   private fovKick = 0;
+  private bowZoom = 0;
   /** Footstep bookkeeping: distance walked since the last step, highest point of the current fall. */
   private stepDistance = 0;
   private airPeak = 0;
@@ -1234,6 +1236,27 @@ export class Game {
     return true;
   }
 
+  /** Loose an arrow along the view with a draw of `power` (0–1). */
+  shootArrow(power: number): void {
+    const [dx, dy, dz] = this.player.viewDir();
+    const p = this.camera.position;
+    const speed = arrowSpeed(power);
+    this.mobs.shootFromPlayer(p.x + dx * 0.4, p.y + dy * 0.4 - 0.1, p.z + dz * 0.4, dx * speed, dy * speed, dz * speed, arrowDamage(power), this.survivor.survival);
+    this.sound.bow({ x: p.x, y: p.y, z: p.z });
+  }
+
+  /** Survival: walk over your stuck arrows to take them back. */
+  private collectArrows(): void {
+    const b = this.player.body;
+    for (const a of this.mobs.arrows) {
+      if (!a.pickup || a.stuck <= 0 || a.removed) continue;
+      if (Math.abs(a.x - b.x) > 1.2 || Math.abs(a.z - b.z) > 1.2 || a.y < b.y - 0.6 || a.y > b.y + 2.4) continue;
+      if (this.survivor.collect({ id: I.ARROW, count: 1, damage: 0 }) > 0) return;
+      a.removed = true;
+      this.sound.pickup();
+    }
+  }
+
   /** Right click on an interactive block (crafting table). Sneaking skips it. */
   private useBlock(hit: RayHit): boolean {
     if (this.survivor.sneaking) return false;
@@ -1335,6 +1358,7 @@ export class Game {
     // Camera effects: sneaking lowers the eyes, sprinting widens the view, hits shake it.
     this.sneakDrop += ((surv.sneaking ? SNEAK_DROP : 0) - this.sneakDrop) * Math.min(1, dt * 12);
     this.fovKick += ((surv.sprinting ? 1 : 0) - this.fovKick) * Math.min(1, dt * 8);
+    this.bowZoom += ((surv.drawing ? bowPower(surv.drawing.time) : 0) - this.bowZoom) * Math.min(1, dt * 12);
     this.hurtShake = Math.max(0, this.hurtShake - dt * 3);
     this.camera.position.set(
       pl.prevX + (b.x - pl.prevX) * alpha,
@@ -1343,7 +1367,7 @@ export class Game {
     );
     this.camera.rotation.set(pl.pitch, pl.yaw, Math.sin(this.hurtShake * 9) * this.hurtShake * 0.06);
     this.sound.setListener({ x: this.camera.position.x, y: this.camera.position.y, z: this.camera.position.z, yaw: pl.yaw });
-    const fov = this.settings.fov * (1 + this.fovKick * 0.1);
+    const fov = this.settings.fov * (1 + this.fovKick * 0.1) * (1 - this.bowZoom * 0.15);
     if (Math.abs(this.camera.fov - fov) > 0.01) this.camera.fov = fov;
 
     this.updateTarget();
@@ -1388,6 +1412,12 @@ export class Game {
       }
     } else {
       surv.mining = null;
+    }
+    if (world) {
+      // Bows: hold use to draw, let go to shoot. Leaving play cancels the draw.
+      if (!playing) surv.drawing = null;
+      const power = surv.updateBow(playing && this.input.locked && this.input.isButtonHeld(BUTTON_RIGHT), dt);
+      if (power !== null) this.shootArrow(power);
     }
     this.crack.set(surv.mining, surv.mining?.progress ?? 0);
 
@@ -1489,6 +1519,7 @@ export class Game {
         },
       };
       this.mobs.update(mw, dt, target, surv.difficulty === 'peaceful');
+      if (surv.survival && alive) this.collectArrows();
     }
     // Block behaviours and vitals tick at 20 Hz on the same fixed clock.
     this.stepCount++;

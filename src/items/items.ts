@@ -24,6 +24,9 @@ export const I = {
   BUCKET: 270,
   WATER_BUCKET: 271,
   LAVA_BUCKET: 272,
+  FLINT: 273,
+  ARROW: 274,
+  BOW: 275,
 } as const;
 
 export type ToolKind = 'pickaxe' | 'axe' | 'shovel' | 'sword';
@@ -77,6 +80,8 @@ export interface ItemDef {
   readonly tool: ToolInfo | null;
   /** Damage dealt when hitting with it (a fist does 1). */
   readonly attack: number;
+  /** Uses before it breaks (tools, bow); 0 for items that don't wear. */
+  readonly durability: number;
   readonly food: FoodInfo | null;
   /** Furnace burn time in ticks (0: not a fuel). */
   readonly fuel: number;
@@ -96,6 +101,7 @@ function add(d: Partial<ItemDef> & { id: number; name: string }): void {
     maxStack: 64,
     tool: null,
     attack: 1,
+    durability: 0,
     food: null,
     fuel: 0,
     block: false,
@@ -138,6 +144,9 @@ add({ id: I.STRING, name: 'String' });
 add({ id: I.BUCKET, name: 'Bucket', maxStack: 16 });
 add({ id: I.WATER_BUCKET, name: 'Water Bucket', maxStack: 1 });
 add({ id: I.LAVA_BUCKET, name: 'Lava Bucket', maxStack: 1, fuel: 20000 });
+add({ id: I.FLINT, name: 'Flint' });
+add({ id: I.ARROW, name: 'Arrow' });
+add({ id: I.BOW, name: 'Bow', maxStack: 1, durability: 384, fuel: 300 });
 
 const BASE_ATTACK: Record<ToolKind, number> = { pickaxe: 2, axe: 3, shovel: 1.5, sword: 4 };
 TOOL_KINDS.forEach((kind) => {
@@ -148,6 +157,7 @@ TOOL_KINDS.forEach((kind) => {
       name,
       maxStack: 1,
       tool: { kind, tier: t, level: tier.level, speed: tier.speed, durability: tier.durability },
+      durability: tier.durability,
       attack: BASE_ATTACK[kind] + tier.damage,
       fuel: t === 0 ? 200 : 0,
     });

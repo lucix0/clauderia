@@ -196,10 +196,10 @@ export class ContainerView {
       show(this.tooltip, false);
       return;
     }
-    const tool = itemDef(s.id)?.tool;
+    const durability = itemDef(s.id)?.durability ?? 0;
     const food = itemDef(s.id)?.food;
     const lines = [itemName(s.id)];
-    if (tool) lines.push(`Durability ${tool.durability - s.damage} / ${tool.durability}`);
+    if (durability > 0) lines.push(`Durability ${durability - s.damage} / ${durability}`);
     if (food) lines.push(`Restores ${food.hunger / 2} hunger`);
     this.tooltip.replaceChildren(...lines.map((l, i) => el('div', { className: i ? 'tip-sub' : 'tip-name', text: l })));
     show(this.tooltip, true);

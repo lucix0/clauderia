@@ -146,6 +146,8 @@ export function drops(value: number, held: ItemStack | null, rand: () => number)
     }
     case B.BOOKSHELF:
       return one(B.PLANKS, 3);
+    case B.GRAVEL:
+      return rand() < 0.1 ? one(I.FLINT) : one(B.GRAVEL);
     default:
       return one(id);
   }

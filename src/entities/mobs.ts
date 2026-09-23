@@ -51,8 +51,9 @@ export const MOBS: Readonly<Record<MobKind, MobDef>> = {
   skeleton: {
     kind: 'skeleton', name: 'Skeleton', width: 0.6, height: 1.9, health: 20, speed: 2.4, hostile: true, undead: true, damage: 2,
     drops: (r) => {
-      const n = between(r, 0, 2);
-      return n > 0 ? [stack(I.BONE, n)] : [];
+      const bones = between(r, 0, 2);
+      const arrows = between(r, 0, 2);
+      return [...(bones > 0 ? [stack(I.BONE, bones)] : []), ...(arrows > 0 ? [stack(I.ARROW, arrows)] : [])];
     },
   },
   spider: {
@@ -112,6 +113,12 @@ export interface Arrow {
   stuck: number;
   age: number;
   removed: boolean;
+  /** Shot by the player: hits mobs instead of the player. */
+  fromPlayer: boolean;
+  /** Damage on hitting something. */
+  damage: number;
+  /** The player can pick it up once it has stuck. */
+  pickup: boolean;
 }
 
 /** What mobs need from the world. */
@@ -539,8 +546,46 @@ export class Mobs {
       stuck: 0,
       age: 0,
       removed: false,
+      fromPlayer: false,
+      damage: 3,
+      pickup: false,
     });
     this.events.shot?.(m);
+  }
+
+  /** The player looses an arrow from (x, y, z) with velocity (vx, vy, vz). */
+  shootFromPlayer(x: number, y: number, z: number, vx: number, vy: number, vz: number, damage: number, pickup: boolean): Arrow {
+    const a: Arrow = {
+      id: this.nextId++,
+      x,
+      y,
+      z,
+      vx,
+      vy,
+      vz,
+      prevX: x,
+      prevY: y,
+      prevZ: z,
+      stuck: 0,
+      age: 0,
+      removed: false,
+      fromPlayer: true,
+      damage,
+      pickup,
+    };
+    this.arrows.push(a);
+    return a;
+  }
+
+  /** The first living mob whose box contains (x, y, z), if any. */
+  private mobAt(x: number, y: number, z: number): Mob | null {
+    for (const m of this.list) {
+      if (m.removed || m.dying >= 0) continue;
+      const b = m.body;
+      const r = b.width / 2 + 0.1;
+      if (Math.abs(x - b.x) < r && Math.abs(z - b.z) < r && y > b.y && y < b.y + b.height + 0.1) return m;
+    }
+    return null;
   }
 
   private updateArrows(world: MobWorld, dt: number, player: MobTarget | null): void {
@@ -567,12 +612,19 @@ export class Mobs {
         a.y += (a.vy * dt) / steps;
         a.z += (a.vz * dt) / steps;
         if (world.solidHeight(Math.floor(a.x), Math.floor(a.y), Math.floor(a.z)) > a.y - Math.floor(a.y)) {
-          a.stuck = 8;
+          // The player's arrows linger to be picked up again.
+          a.stuck = a.pickup ? 60 : 8;
           this.events.arrowStuck?.(a.x, a.y, a.z);
           break;
         }
-        if (player?.attackable && Math.abs(a.x - player.x) < 0.4 && Math.abs(a.z - player.z) < 0.4 && a.y > player.y && a.y < player.y + 1.8) {
-          player.hurt(3, a.x - a.vx, a.z - a.vz);
+        if (a.fromPlayer) {
+          const m = this.mobAt(a.x, a.y, a.z);
+          if (m) {
+            this.hit(m, a.damage, a.x - a.vx, a.z - a.vz);
+            a.removed = true;
+          }
+        } else if (player?.attackable && Math.abs(a.x - player.x) < 0.4 && Math.abs(a.z - player.z) < 0.4 && a.y > player.y && a.y < player.y + 1.8) {
+          player.hurt(a.damage, a.x - a.vx, a.z - a.vz);
           a.removed = true;
         }
       }

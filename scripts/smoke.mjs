@@ -501,6 +501,23 @@ try {
     await waitSteps(80);
     const killed = zombie.removed;
     const sword = g.survivor.inventory[0];
+    // A full draw of the bow at a pig eight blocks away.
+    g.command('/give bow');
+    g.command('/give arrow 4');
+    g.select(1);
+    g.command(`/summon pig ${b.x} ${b.y} ${b.z - 8}`);
+    const pig = g.mobs.list[g.mobs.list.length - 1];
+    await waitSteps(20);
+    const px = pig.body.x - b.x;
+    const pz = pig.body.z - b.z;
+    g.player.yaw = Math.atan2(-px, -pz);
+    g.player.pitch = Math.atan2(pig.body.y + 0.6 - (b.y + 1.62), Math.hypot(px, pz)) + 0.03;
+    await g.nextFrame();
+    g.survivor.updateBow(true, 1);
+    const power = g.survivor.updateBow(false, 0);
+    if (power !== null) g.shootArrow(power);
+    await waitSteps(40);
+    const bow = { power, pigHealth: pig.health, arrowsLeft: g.survivor.inventory.filter((st) => st?.id === 274).reduce((n, st) => n + st.count, 0) };
     // Peaceful clears hostiles.
     g.command('/summon skeleton ~ ~ ~');
     g.command('/difficulty peaceful');
@@ -510,11 +527,12 @@ try {
     g.command('/gamemode creative');
     g.command('/time set noon');
     g.survivor.respawn();
-    return { hurt, swings, killed, swordWear: sword?.damage ?? -1, hostiles };
+    return { hurt, swings, killed, swordWear: sword?.damage ?? -1, hostiles, bow };
   });
   check(fight.hurt > 0, 'a zombie hurts a survival player at night', JSON.stringify(fight));
   check(fight.killed && fight.swordWear > 0, 'the player kills the zombie with a sword', JSON.stringify(fight));
   check(fight.hostiles === 0, 'Peaceful removes hostile mobs', JSON.stringify(fight));
+  check(fight.bow.power === 1 && fight.bow.pigHealth < 10 && fight.bow.arrowsLeft === 3, 'a drawn bow shoots an arrow into a pig', JSON.stringify(fight.bow));
 
   await inf.evaluate(() => window.__game.setViewpoint({ x: window.__game.player.spawn.x, y: 90, z: window.__game.player.spawn.z, yaw: 0, pitch: -0.3 }));
   const flight = await inf.evaluate(async () => {

@@ -77,6 +77,9 @@ export const RECIPES: readonly Recipe[] = [
   shaped(['XX', 'XX'], { X: B.SAND }, out(B.SANDSTONE)),
   shaped(['XXX'], { X: B.STONE }, out(B.SLAB, 6)),
   shaped(['XX', 'XX'], { X: B.SNOW_LAYER }, out(B.SNOW_BLOCK)),
+  // No birds here, so arrows are fletched with nothing but a flint head.
+  shaped(['F', 'S'], { F: I.FLINT, S: I.STICK }, out(I.ARROW, 4)),
+  shaped([' SX', 'S X', ' SX'], { S: I.STICK, X: I.STRING }, out(I.BOW)),
   ...(Object.keys(TOOL_PATTERNS) as ToolKind[]).flatMap((kind) =>
     TIERS.map((_, t) => shaped(TOOL_PATTERNS[kind], { X: TIER_MATERIAL[t]!, S: I.STICK }, out(toolId(kind, t)))),
   ),

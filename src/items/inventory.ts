@@ -78,15 +78,15 @@ export function takeOne(slots: Slots, i: number): ItemStack | null {
 }
 
 /**
- * Wear a tool in a slot by `amount`; it breaks (slot empties) when its
+ * Wear a tool (or bow) in a slot by `amount`; it breaks (slot empties) when its
  * durability runs out. Returns true if it broke.
  */
 export function wearTool(slots: Slots, i: number, amount = 1): boolean {
   const s = slots[i];
-  const tool = s ? itemDef(s.id)?.tool : null;
-  if (!s || !tool) return false;
+  const durability = s ? (itemDef(s.id)?.durability ?? 0) : 0;
+  if (!s || durability <= 0) return false;
   s.damage += amount;
-  if (s.damage >= tool.durability) {
+  if (s.damage >= durability) {
     slots[i] = null;
     return true;
   }

@@ -156,6 +156,29 @@ function paint(id: number, s: Sprite): void {
       }
       break;
     }
+    case I.FLINT:
+      s.draw(['...LX...', '..LXXD..', '.LXXXXD.', 'LXXLXXXD', 'XXXXXXD.', '.XXXXD..', '..DDD...'], { X: hex('#3c3c40'), L: hex('#7a7a82'), D: hex('#1e1e22') }, 4, 4);
+      break;
+    case I.ARROW:
+      stickDiag(s, 10, 3, 12);
+      // Flint head at the top right, a notched tail at the bottom left.
+      s.draw(['.LXX', 'LXXX', '.XXD', '.XD.'], { X: hex('#4a4a50'), L: hex('#8a8a92'), D: hex('#26262a') }, 11, 1);
+      s.draw(['D.D', '.D.', 'D.D'], { D: hex('#5a4020') }, 1, 12);
+      break;
+    case I.BOW: {
+      // The string runs along the diagonal; the limb bows out toward the top right.
+      for (let i = 0; i <= 11; i++) s.set(2 + i, 2 + i, hex('#e8e8e8'));
+      for (let i = 0; i <= 40; i++) {
+        const t = i / 40;
+        const bulge = Math.sin(Math.PI * t) * 3.2;
+        const x = Math.round(2 + t * 11 + bulge);
+        const y = Math.round(2 + t * 11 - bulge);
+        s.set(x, y, WOOD.a!);
+        s.set(x + 1, y, WOOD.b!);
+      }
+      s.draw(['XX', 'XX'], { X: hex('#4a3620') }, 10, 4);
+      break;
+    }
     default:
       if (id >= TOOL_FIRST && id < TOOL_FIRST + TOOL_KINDS.length * TIERS.length) {
         const k = id - TOOL_FIRST;

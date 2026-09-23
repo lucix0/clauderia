@@ -6,6 +6,7 @@
 import { ItemEntities } from '../entities/items';
 import {
   addStack,
+  countItem,
   emptySlots,
   HOTBAR_SLOTS,
   INVENTORY_SIZE,
@@ -17,12 +18,13 @@ import {
   type ItemStack,
   type Slots,
 } from '../items/inventory';
-import { itemDef, maxStack } from '../items/items';
+import { I, itemDef, maxStack } from '../items/items';
 import type { Body } from '../player/physics';
 import type { Difficulty, GameMode } from '../save/records';
 import { B, idOf, IS_LIQUID, OCCLUDES } from '../world/blocks';
 import { breakBlock, type Cell } from '../world/placement';
 import type { World } from '../world/world';
+import { bowPower, MIN_DRAW_S } from './bow';
 import { breakTime, drops, toolWear } from './mining';
 import {
   canSprint,
@@ -67,6 +69,8 @@ export class Survivor {
   sneaking = false;
   mining: MiningState | null = null;
   eating: { slot: number; time: number } | null = null;
+  /** Drawing the bow: which slot, and seconds held. */
+  drawing: { slot: number; time: number } | null = null;
   dead = false;
   deathCause: DamageCause | null = null;
   /** Seconds before the next block can start breaking. */
@@ -122,6 +126,7 @@ export class Survivor {
     this.deathCause = null;
     this.mining = null;
     this.eating = null;
+    this.drawing = null;
     this.sprinting = false;
   }
 
@@ -227,6 +232,41 @@ export class Survivor {
     eat(this.vitals, food);
     this.events.inventory();
     return true;
+  }
+
+  /** Can the held bow shoot (creative needs no arrows)? */
+  get canShoot(): boolean {
+    return this.held?.id === I.BOW && !this.dead && (!this.survival || countItem(this.inventory, I.ARROW) > 0);
+  }
+
+  /**
+   * Hold use with a bow to draw it; letting go shoots. Returns the shot's
+   * power (0–1) on release, else null. Switching slots cancels the draw.
+   */
+  updateBow(using: boolean, dt: number): number | null {
+    const d = this.drawing;
+    if (d && d.slot !== this.selected) this.drawing = null;
+    if (using) {
+      if (!this.canShoot) {
+        this.drawing = null;
+        return null;
+      }
+      if (!this.drawing) this.drawing = { slot: this.selected, time: 0 };
+      this.drawing.time += dt;
+      return null;
+    }
+    const released = this.drawing;
+    this.drawing = null;
+    if (!released || released.time < MIN_DRAW_S || !this.canShoot) return null;
+    // Survival shots use up an arrow and wear the bow.
+    if (this.survival) {
+      const i = this.inventory.findIndex((s) => s?.id === I.ARROW);
+      takeOne(this.inventory, i);
+      wearTool(this.inventory, this.selected, 1);
+      exhaust(this.vitals, 0.1);
+      this.events.inventory();
+    }
+    return bowPower(released.time);
   }
 
   // ---- Per game tick (20 Hz) ----
