@@ -16,13 +16,14 @@ import { CommandBar } from './ui/commandBar';
 import { WorkerPool } from './workers/pool';
 import { ItemEntities, loadItems, saveItem } from './entities/items';
 import { ItemRenderer } from './entities/itemRender';
-import { Container } from './items/container';
+import { Container, type ContainerExtras, type Section } from './items/container';
+import { fuelTicks, furnaceSlotFor, SMELT_TICKS } from './items/smelting';
 import { HOTBAR_SLOTS, type ItemStack } from './items/inventory';
 import { I, itemByName, itemDef, maxStack } from './items/items';
 import { BUTTON_LEFT, BUTTON_MIDDLE, BUTTON_RIGHT, Input } from './player/input';
 import { bodyOverlapsCell, type CollisionWorld } from './player/physics';
 import { collisionWorld, Player } from './player/player';
-import type { RayHit } from './player/raycast';
+import { raycast, type RayHit } from './player/raycast';
 import { createAtlas, type Atlas } from './render/atlas';
 import { ChunkRenderer } from './render/chunks';
 import { CrackOverlay } from './render/crack';
@@ -49,7 +50,21 @@ import { TitleScreen, type CreateWorldOptions } from './ui/title';
 import { randomSeed, seedFromString } from './util/prng';
 import { Survivor } from './survival/survivor';
 import { DEATH_MESSAGES, MAX_AIR } from './survival/vitals';
-import { B, blockBounds, blockName, DEFAULT_HOTBAR, facingToward, HAS_FACING, idOf, IS_SOLID } from './world/blocks';
+import { BlockEntities } from './world/blockEntities';
+import {
+  B,
+  blockBounds,
+  blockName,
+  DEFAULT_HOTBAR,
+  facingToward,
+  FURNACE_LIT,
+  HAS_FACING,
+  idOf,
+  IS_LIQUID,
+  IS_SOLID,
+  REPLACEABLE,
+  SELECTABLE,
+} from './world/blocks';
 import { BIOME_KEYS, BIOMES } from './world/gen/biomes';
 import { infiniteGenerator } from './world/gen/infinite';
 import { breakBlock, placeBlock, placementTarget, placementValue, type Cell } from './world/placement';
@@ -113,6 +128,8 @@ export class Game {
   readonly survivor = new Survivor();
   /** Dropped items. */
   readonly items = new ItemEntities();
+  /** Furnaces and chests. */
+  readonly blockEntities = new BlockEntities();
   readonly itemRenderer: ItemRenderer;
   readonly crack: CrackOverlay;
   readonly containerView: ContainerView;
@@ -405,12 +422,14 @@ export class Game {
     this.chunks.disposeAll();
     this.items.clear();
     this.itemRenderer.clear();
+    this.blockEntities.clear();
   }
 
   /** Entities to store with a chunk (and, when unloading, take out of the world). */
   private chunkExtras(chunk: Chunk, remove: boolean): ChunkExtras {
     const extras = emptyExtras();
     extras.items = this.items.inChunk(chunk.cx, chunk.cz, remove).map(saveItem);
+    extras.blockEntities = this.blockEntities.inChunk(chunk.cx, chunk.cz, remove);
     return extras;
   }
 
@@ -476,12 +495,25 @@ export class Game {
     this.chunks.setWorld(world);
     this.items.clear();
     this.itemRenderer.clear();
+    this.blockEntities.clear();
     session.extrasFor = (chunk, remove) => this.chunkExtras(chunk, remove);
-    for (const rec of session.initialRecords) loadItems(this.items, rec.extras.items);
+    for (const rec of session.initialRecords) {
+      loadItems(this.items, rec.extras.items);
+      this.blockEntities.load(rec.extras.blockEntities);
+    }
+    // A broken furnace or chest spills what it held.
+    world.addListener((x, y, z, oldValue, newValue) => {
+      const was = idOf(oldValue);
+      if ((was !== B.FURNACE && was !== B.CHEST) || idOf(newValue) === was) return;
+      const e = this.blockEntities.remove(x, y, z);
+      if (e) for (const st of BlockEntities.contents(e)) this.items.dropFromBlock(st, x, y, z);
+    });
     const streamer = new Streamer(world, this.pool, this.chunks, {
       loadRecord: (cx, cz) => session.loadRecord(cx, cz),
       added: (_chunk, record) => {
-        if (record) loadItems(this.items, record.extras.items);
+        if (!record) return;
+        loadItems(this.items, record.extras.items);
+        this.blockEntities.load(record.extras.blockEntities);
       },
       unloaded: (chunks) => session.chunksUnloaded(chunks),
     });
@@ -688,11 +720,18 @@ export class Game {
 
   // ---- Containers, dropping, death ----
 
-  /** Open a container screen (E inventory or a crafting table). */
-  openContainer(kind: ScreenKind, title: string, gridSize: 0 | 2 | 3): void {
+  /** Open a container screen (E inventory, crafting table, furnace, chest). */
+  openContainer(
+    kind: ScreenKind,
+    title: string,
+    gridSize: 0 | 2 | 3,
+    extras: ContainerExtras | null = null,
+    decorate: ((top: HTMLElement) => void) | null = null,
+  ): void {
     const open = (): void => {
       this.state = 'container';
-      this.container = new Container(this.survivor.inventory, gridSize);
+      this.container = new Container(this.survivor.inventory, gridSize, extras);
+      this.containerView.decorate = decorate;
       this.containerView.open(this.container, kind, title);
     };
     if (this.input.locked) {
@@ -714,6 +753,75 @@ export class Game {
     if (relock && this.state === 'container') {
       this.state = 'playing';
       this.resume();
+    }
+  }
+
+  private openFurnace(x: number, y: number, z: number): void {
+    const f = this.blockEntities.furnace(x, y, z);
+    const input: Section = { id: 'input', slots: f.slots, indices: [0] };
+    const fuel: Section = { id: 'fuel', slots: f.slots, indices: [1], accepts: (st) => fuelTicks(st.id) > 0 };
+    const output: Section = { id: 'output', slots: f.slots, indices: [2], output: true, accepts: () => false };
+    this.openContainer(
+      'furnace',
+      'Furnace',
+      0,
+      {
+        sections: [input, fuel, output],
+        shiftFromPlayer: (st) => {
+          const where = furnaceSlotFor(st);
+          return where === 'input' ? input : where === 'fuel' ? fuel : null;
+        },
+      },
+      (top) => {
+        const flame = top.querySelector<HTMLElement>('.furnace-flame-fill');
+        const arrow = top.querySelector<HTMLElement>('.furnace-arrow-fill');
+        if (flame) flame.style.height = `${f.burnMax > 0 ? (f.burn / f.burnMax) * 100 : 0}%`;
+        if (arrow) arrow.style.width = `${(f.progress / SMELT_TICKS) * 100}%`;
+      },
+    );
+  }
+
+  private openChest(x: number, y: number, z: number): void {
+    const slots = this.blockEntities.chest(x, y, z);
+    const chest: Section = { id: 'chest', slots, indices: slots.map((_, i) => i) };
+    this.openContainer('chest', 'Chest', 0, { sections: [chest], shiftFromPlayer: () => chest });
+  }
+
+  /** Right click holding a bucket: scoop up a fluid source, or pour one out. */
+  private useBucket(held: ItemStack): void {
+    const world = this.world;
+    if (!world) return;
+    const surv = this.survivor;
+    const p = this.camera.position;
+    const [dx, dy, dz] = this.player.viewDir();
+    if (held.id === I.BUCKET) {
+      const hit = raycast(world, p.x, p.y, p.z, dx, dy, dz, 5, (id) => SELECTABLE[id] === 1 || IS_LIQUID[id] === 1);
+      if (!hit || !IS_LIQUID[hit.id]) return;
+      const value = world.get(hit.x, hit.y, hit.z);
+      if (value >> 8 !== 0) return; // only sources
+      world.setBlock(hit.x, hit.y, hit.z, B.AIR);
+      this.chunks.rebuildAt(hit.x, hit.y, hit.z);
+      const filled: ItemStack = { id: hit.id === B.WATER ? I.WATER_BUCKET : I.LAVA_BUCKET, count: 1, damage: 0 };
+      if (surv.survival && held.count === 1) surv.inventory[surv.selected] = filled;
+      else {
+        if (surv.survival) held.count--;
+        if (surv.collect(filled) > 0) this.throwStack(filled);
+      }
+      this.hud.render(surv.inventory, surv.selected);
+      return;
+    }
+    const hit = this.target;
+    if (!hit) return;
+    const normal = [hit.nx, hit.ny, hit.nz] as const;
+    const here = world.getId(hit.x, hit.y, hit.z);
+    const cell = REPLACEABLE[here] ? { x: hit.x, y: hit.y, z: hit.z } : placementTarget(world, hit, normal, B.WATER);
+    const cur = world.getId(cell.x, cell.y, cell.z);
+    if (cur !== B.AIR && !REPLACEABLE[cur] && !IS_LIQUID[cur]) return;
+    if (!world.setBlock(cell.x, cell.y, cell.z, held.id === I.WATER_BUCKET ? B.WATER : B.LAVA)) return;
+    this.edited(cell);
+    if (surv.survival) {
+      surv.inventory[surv.selected] = { id: I.BUCKET, count: 1, damage: 0 };
+      this.hud.render(surv.inventory, surv.selected);
     }
   }
 
@@ -953,6 +1061,10 @@ export class Game {
     } else if (button === BUTTON_RIGHT) {
       if (hit && this.useBlock(hit)) return;
       const held = surv.held;
+      if (held && (held.id === I.BUCKET || held.id === I.WATER_BUCKET || held.id === I.LAVA_BUCKET)) {
+        this.useBucket(held);
+        return;
+      }
       if (!hit || !held) return;
       if (held.id === I.BONE_MEAL) {
         if (world.getId(hit.x, hit.y, hit.z) === B.SAPLING && this.session?.ticker.forceGrow(hit.x, hit.y, hit.z)) {
@@ -987,6 +1099,14 @@ export class Game {
     const id = this.world?.getId(hit.x, hit.y, hit.z);
     if (id === B.CRAFTING_TABLE) {
       this.openContainer('crafting', 'Crafting', 3);
+      return true;
+    }
+    if (id === B.FURNACE) {
+      this.openFurnace(hit.x, hit.y, hit.z);
+      return true;
+    }
+    if (id === B.CHEST) {
+      this.openChest(hit.x, hit.y, hit.z);
       return true;
     }
     return false;
@@ -1181,6 +1301,16 @@ export class Game {
       this.session.ticker.setFocus(b.x, b.z);
       this.session.ticker.step();
       surv.tick(world, b, eyeY);
+      this.blockEntities.tick(
+        (x, z) => world.isActive(x, z),
+        (x, y, z, on) => {
+          const v = world.get(x, y, z);
+          if (idOf(v) !== B.FURNACE) return;
+          world.setBlock(x, y, z, (v & ~(FURNACE_LIT << 8)) | (on ? FURNACE_LIT << 8 : 0));
+        },
+      );
+      // Keep an open furnace's gauges moving.
+      if (this.container && this.stepCount % (STEPS_PER_TICK * 4) === 0) this.containerView.render();
     }
   }
 

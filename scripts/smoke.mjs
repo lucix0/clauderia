@@ -375,6 +375,38 @@ try {
   check(surv2.fall >= 5 && surv2.fall <= 8, 'survival: falling ten blocks hurts', `${surv2.fall} damage`);
   await inf.waitForTimeout(300);
   await inf.screenshot({ path: `${OUT}/survival-hud.png` });
+  const bucket = await inf.evaluate(async () => {
+    const g = window.__game;
+    const w = g.currentWorld;
+    const b = g.player.body;
+    const x = Math.floor(b.x) + 2;
+    const z = Math.floor(b.z);
+    const y = 100;
+    w.setBlock(x, y - 1, z, 1);
+    w.setBlock(x, y, z, 8); // a water source on a stone pillar
+    g.survivor.inventory[0] = { id: 270, count: 1, damage: 0 };
+    g.select(0);
+    g.player.body.flying = true;
+    g.player.teleport(x + 0.5, y + 1.4, z + 0.5);
+    g.player.pitch = -1.55;
+    // The camera (and so the aim) moves on the next frames.
+    await g.nextFrame();
+    await g.nextFrame();
+    g.useBucket(g.survivor.held);
+    const scooped = { cell: w.getId(x, y, z), held: g.survivor.held?.id };
+    await g.nextFrame();
+    g.useBucket(g.survivor.held);
+    const poured = { cell: w.getId(x, y, z), held: g.survivor.held?.id };
+    g.player.body.flying = false;
+    w.setBlock(x, y, z, 0);
+    w.setBlock(x, y - 1, z, 0);
+    return { scooped, poured };
+  });
+  check(
+    bucket.scooped.cell === 0 && bucket.scooped.held === 271 && bucket.poured.cell === 8 && bucket.poured.held === 270,
+    'survival: a bucket scoops up a water source and pours it back',
+    JSON.stringify(bucket),
+  );
   const death = await inf.evaluate(async () => {
     const g = window.__game;
     const had = g.survivor.inventory.filter(Boolean).length;
@@ -482,6 +514,12 @@ try {
     const x = Math.floor(s.x) - 5;
     const z = Math.floor(s.z) + 7;
     const placed = g.currentWorld.setBlock(x, 110, z, 47); // obsidian in the sky
+    // A chest with diamonds, and an apple lying on the obsidian.
+    g.currentWorld.setBlock(x + 1, 110, z, 67);
+    g.blockEntities.chest(x + 1, 110, z)[4] = { id: 261, count: 3, damage: 0 };
+    g.items.spawn({ id: 262, count: 2, damage: 0 }, x + 0.5, 111.2, z + 0.5, 0, 0, 0, 99);
+    g.command('/gamemode creative');
+    g.player.body.flying = true;
     g.command('/tp 3000 100 3000'); // far enough to unload the edit
     const unloaded = await until(() => g.currentWorld.chunkAt(x, z) === undefined, 15000);
     await new Promise((r) => setTimeout(r, 2000)); // let the unloaded chunk be written
@@ -496,8 +534,14 @@ try {
   await game.waitForSelector('.title-screen:not(.hidden)');
   await game.click('.world-row:has-text("Endless") >> text=Play');
   await game.waitForFunction(() => window.__ready === true, null, { timeout: 120_000 });
-  const kept2 = await game.evaluate(({ x, z }) => window.__game.currentWorld.get(x, 110, z), spot);
-  check(kept2 === 47, 'Infinite world edits survive a page reload', `block ${kept2}`);
+  const kept2 = await game.evaluate(async ({ x, z }) => {
+    const g = window.__game;
+    const chest = g.blockEntities.get(x + 1, 110, z);
+    const items = g.items.list.filter((e) => Math.abs(e.body.x - x - 0.5) < 1 && Math.abs(e.body.z - z - 0.5) < 1).map((e) => e.stack);
+    return { block: g.currentWorld.get(x, 110, z), chest: chest?.kind === 'chest' ? chest.slots[4] : null, items };
+  }, spot);
+  check(kept2.block === 47, 'Infinite world edits survive a page reload', JSON.stringify(kept2));
+  check(kept2.chest?.id === 261 && kept2.chest.count === 3 && kept2.items.some((st) => st.id === 262 && st.count === 2), 'chest contents and dropped items survive too', JSON.stringify(kept2));
   await game.evaluate(() => window.__game.quitToTitle());
   await game.waitForSelector('.title-screen:not(.hidden)');
 

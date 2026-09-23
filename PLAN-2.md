@@ -159,3 +159,20 @@ milestone.
   when close and vanish after five minutes; they are saved with their chunk.
 - Only white wool is craftable (4 string); coloured wool, sponge and bedrock
   are Creative-only. Bookshelves drop 3 planks.
+- **M6**: furnaces smelt one item per 10 s; fuel burn times (coal and
+  charcoal 8 items, planks/logs 1.5, sticks 0.5, lava bucket 100, leaving
+  the bucket). Ores smelt to ingots / gems (coal and diamond ore too), sand →
+  glass, cobblestone → stone, clay block → bricks block, logs → charcoal,
+  raw meat → cooked. A lit furnace is a block state that emits light 13.
+  Furnaces and chests are block entities saved with their chunk; they only
+  tick in loaded, lit chunks and spill their contents when broken.
+- Finite fluids (Infinite worlds only; Classic keeps its spreading rules):
+  level in the block state (0 source, 1–7 flowing, plus a falling flag);
+  water reaches 7 blocks every 5 ticks, lava 3 blocks every 30 ticks; both
+  prefer the direction whose nearest drop is closest (within 4 / 2 blocks).
+  Two water sources make a third between them. Lava touched by water turns
+  to obsidian (source) or cobblestone (flowing); lava flowing onto water
+  makes stone. Surfaces are drawn per cell at (8 − level) / 9 height, with
+  the step between neighbouring levels filled in (no corner smoothing).
+- Buckets only scoop sources; pouring replaces air, plants, snow layers
+  and flowing fluid. Creative keeps the empty bucket.

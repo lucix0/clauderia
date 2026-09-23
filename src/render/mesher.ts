@@ -18,6 +18,7 @@ import {
   FULL_BRIGHT,
   HAS_AXIS,
   HAS_FACING,
+  IS_LIQUID,
   OCCLUDES,
   PASS,
   PASS_COUNT,
@@ -35,6 +36,7 @@ import {
   TINT_NONE,
   TORCH_ATTACH,
 } from '../world/blocks';
+import { fluidHeight } from '../world/fluids';
 import { PAD, padIndex, type PaddedSection } from './padded';
 
 export interface PassMesh {
@@ -518,7 +520,14 @@ export function meshSection(pad: PaddedSection): ChunkMeshData {
         }
 
         const fullBright = FULL_BRIGHT[id] === 1;
-        const top = shape === SHAPE_SLAB ? 0.5 : shape === SHAPE_LAYER ? 0.125 : 1;
+        const liquid = pad.fluidLevels && IS_LIQUID[id] === 1;
+        const top = liquid
+          ? fluidHeight(value, blocks[i + PAD_LAYER]! & 0xff)
+          : shape === SHAPE_SLAB
+            ? 0.5
+            : shape === SHAPE_LAYER
+              ? 0.125
+              : 1;
         const axis = HAS_AXIS[id] ? (value >> 8) % 3 : 0;
         const snowy = id === B.GRASS && isSnow(blocks[i + PAD_LAYER]! & 0xff);
         const front = HAS_FACING[id] ? FACING_FACES[(value >> 8) & 3]! : -1;
@@ -526,6 +535,15 @@ export function meshSection(pad: PaddedSection): ChunkMeshData {
           const ni = i + PAD_OFFSETS[f]!;
           const nb = blocks[ni]! & 0xff;
           if (OCCLUDES[nb] && !(top < 1 && f === 2)) continue;
+          if (liquid && nb === id && f !== 2 && f !== 3) {
+            // Beside a lower surface of the same fluid, show the step between them.
+            const nbTop = fluidHeight(blocks[ni]!, blocks[ni + PAD_LAYER]! & 0xff);
+            if (nbTop < top) {
+              const lh = fullBright ? (light[ni]! & 0xf0) | 15 : light[ni]!;
+              emitBoxFace(buf, f, x, y, z, [0, nbTop, 0, 1, top, 1], FACE_TILES[id * 6 + f]!, fullBright ? FULL_BYTE : FACE_BYTES[f]!, lh);
+            }
+            continue;
+          }
           if (!faceVisible(id, shape, nb, f)) continue;
           const lightHere = fullBright ? (light[ni]! & 0xf0) | 15 : light[ni]!;
           let tile = FACE_TILES[id * 6 + f]!;

@@ -1,8 +1,9 @@
 /**
  * Classic block behaviours, run on a fixed tick (20 per second):
  * - sand and gravel fall;
- * - water and lava spread without limit (lava slower), with a cap on
- *   updates per tick so floods can't stall the game;
+ * - water and lava spread without limit (lava slower) in Classic worlds,
+ *   and as finite, levelled fluids in Infinite worlds (see fluids.ts), with
+ *   a cap on updates per tick so floods can't stall the game;
  * - sponges clear water within 2 blocks and keep it out;
  * - saplings grow into trees;
  * - grass spreads onto lit dirt and dies when covered.
@@ -11,6 +12,7 @@
  */
 import { Rng } from '../util/prng';
 import { B, BLOCKS_LIGHT, IS_LIQUID, IS_SOLID } from './blocks';
+import { updateFluid } from './fluids';
 import type { Chunk } from './chunk';
 import { posFromKey, posKey } from './coords';
 import { growTree, type TreeTarget } from './trees';
@@ -51,8 +53,17 @@ export class Ticker {
   private chunkList: Chunk[] = [];
   private focusX = 0;
   private focusZ = 0;
+  /** Infinite worlds use finite fluids with levels. */
+  private readonly finite: boolean;
+  private readonly fluidWorld;
 
   constructor(private readonly world: World) {
+    this.finite = world.type === 'infinite';
+    this.fluidWorld = {
+      get: (x: number, y: number, z: number) => (world.isActive(x, z) || !world.inColumnBounds(x, z) ? world.get(x, y, z) : B.STONE),
+      set: (x: number, y: number, z: number, v: number) => void world.setBlock(x, y, z, v),
+      inBounds: (x: number, y: number, z: number) => world.inBounds(x, y, z) && world.isActive(x, z),
+    };
     this.rng = new Rng(world.seed ^ 0x7ac3);
     for (const chunk of world.chunks.values()) {
       const b = chunk.blocks;
@@ -175,6 +186,14 @@ export class Ticker {
     // The changed cell itself may react (placed sand falls, placed water flows…).
     const selfDelay = this.reactionDelay(x, y, z, newId);
     if (selfDelay > 0) this.scheduleIndex(i, selfDelay);
+    // Finite fluids: any change to a fluid cell makes its fluid neighbours
+    // recheck their level (so flows dry up when their source goes).
+    if (this.finite && (IS_LIQUID[oldId] || IS_LIQUID[newId]) && oldValue !== newValue) {
+      for (const [dx, dy, dz] of NEIGHBOURS) {
+        const nid = w.getId(x + dx, y + dy, z + dz);
+        if (IS_LIQUID[nid]) this.schedule(x + dx, y + dy, z + dz, this.reactionDelay(x + dx, y + dy, z + dz, nid));
+      }
+    }
     // Neighbours only care when room opened up: liquids flow into air, and
     // sand or gravel above falls into anything non-solid.
     if (!IS_SOLID[newId]) {
@@ -235,7 +254,8 @@ export class Ticker {
         break;
       case B.WATER:
       case B.LAVA:
-        this.spread(x, y, z, id);
+        if (this.finite) updateFluid(this.fluidWorld, x, y, z, (fx, fy, fz, d) => this.schedule(fx, fy, fz, d));
+        else this.spread(x, y, z, id);
         break;
       case B.AIR:
         if (this.touchesEdgeOcean(x, y, z) && !this.nearSponge(x, y, z)) w.setBlock(x, y, z, B.WATER);

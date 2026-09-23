@@ -24,6 +24,8 @@ export interface MeshInput {
   light: Uint8Array;
   /** The column's biome tints (see Chunk.tints), or null for defaults. */
   tints: Uint8Array | null;
+  /** Draw fluids at their level's height (Infinite worlds). */
+  fluidLevels: boolean;
 }
 
 /** Full light array of a chunk (sky << 4 | block per cell), or null for full sky. */
@@ -92,7 +94,7 @@ export function buildMeshInput(world: World, chunk: Chunk, sections: number, lig
     }
   }
   const tints = chunk.tints ? chunk.tints.slice() : null;
-  return { cx: chunk.cx, cz: chunk.cz, sections, blocks, light: lightOut, tints };
+  return { cx: chunk.cx, cz: chunk.cz, sections, blocks, light: lightOut, tints, fluidLevels: world.type === 'infinite' };
 }
 
 /** Copy section `sy` (with its one-cell border) out of a mesh input. */
@@ -101,6 +103,7 @@ export function fillPaddedFromInput(out: PaddedSection, input: MeshInput, sy: nu
   out.cx = input.cx;
   out.cz = input.cz;
   out.tints = input.tints;
+  out.fluidLevels = input.fluidLevels;
   const y0 = sy * 16 - 1;
   for (let py = 0; py < PAD; py++) {
     const y = y0 + py;
