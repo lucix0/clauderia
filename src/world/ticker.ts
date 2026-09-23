@@ -27,6 +27,18 @@ export const FALL_DELAY = 2;
 export const SPONGE_RADIUS = 2;
 /** Chunks (Chebyshev distance from the player) that receive random ticks. */
 export const RANDOM_TICK_RADIUS = 8;
+/** Leaves further than this (through leaves) from any log decay. */
+export const LEAF_REACH = 4;
+/** Leaves state bit: placed by a player, never decays. */
+export const LEAF_PERSISTENT = 1;
+
+function isLog(id: number): boolean {
+  return id === B.LOG || id === B.SPRUCE_LOG || id === B.BIRCH_LOG;
+}
+
+export function isLeaf(id: number): boolean {
+  return id === B.LEAVES || id === B.SPRUCE_LEAVES || id === B.BIRCH_LEAVES;
+}
 
 const NEIGHBOURS: ReadonlyArray<readonly [number, number, number]> = [
   [0, -1, 0],
@@ -55,6 +67,8 @@ export class Ticker {
   private focusZ = 0;
   /** Infinite worlds use finite fluids with levels. */
   private readonly finite: boolean;
+  /** A leaf block decayed (the game drops saplings / apples). */
+  onLeafDecay: (x: number, y: number, z: number, value: number) => void = () => {};
   private readonly fluidWorld;
 
   constructor(private readonly world: World) {
@@ -218,6 +232,48 @@ export class Ticker {
       this.schedule(x, y - 1, z, 60 + this.rng.int(140));
     }
     if (newId === B.SAPLING) this.schedule(x, y, z, 100 + this.rng.int(300));
+    // A log or leaf gone: leaves around it may have lost their tree.
+    if ((isLog(oldId) || isLeaf(oldId)) && oldId !== newId) this.scheduleLeaves(x, y, z);
+  }
+
+  private scheduleLeaves(x: number, y: number, z: number): void {
+    const r = LEAF_REACH;
+    const w = this.world;
+    for (let dy = -r; dy <= r; dy++) {
+      for (let dz = -r; dz <= r; dz++) {
+        for (let dx = -r; dx <= r; dx++) {
+          const v = w.get(x + dx, y + dy, z + dz);
+          if (isLeaf(v & 0xff) && !((v >> 8) & LEAF_PERSISTENT)) this.schedule(x + dx, y + dy, z + dz, 20 + this.rng.int(200));
+        }
+      }
+    }
+  }
+
+  /** Is a log reachable from this leaf through leaves within LEAF_REACH steps? */
+  private leafAttached(x: number, y: number, z: number): boolean {
+    const w = this.world;
+    const seen = new Set<number>([posKey(x, y, z)]);
+    let frontier: Array<[number, number, number]> = [[x, y, z]];
+    for (let d = 0; d < LEAF_REACH && frontier.length; d++) {
+      const next: Array<[number, number, number]> = [];
+      for (const [cx, cy, cz] of frontier) {
+        for (const [dx, dy, dz] of NEIGHBOURS) {
+          const nx = cx + dx;
+          const ny = cy + dy;
+          const nz = cz + dz;
+          const k = posKey(nx, ny, nz);
+          if (seen.has(k)) continue;
+          seen.add(k);
+          const id = w.getId(nx, ny, nz);
+          if (isLog(id)) return true;
+          // Unloaded neighbours might hold the trunk: don't decay across them.
+          if (!w.isLoaded(nx, nz) && w.inColumnBounds(nx, nz)) return true;
+          if (isLeaf(id)) next.push([nx, ny, nz]);
+        }
+      }
+      frontier = next;
+    }
+    return false;
   }
 
   private wakeWaterAround(x: number, y: number, z: number, r: number): void {
@@ -273,6 +329,15 @@ export class Ticker {
       case B.SAPLING:
         if (!this.growSapling(x, y, z)) this.schedule(x, y, z, 200 + this.rng.int(400));
         break;
+      case B.LEAVES:
+      case B.SPRUCE_LEAVES:
+      case B.BIRCH_LEAVES: {
+        const value = w.get(x, y, z);
+        if ((value >> 8) & LEAF_PERSISTENT || this.leafAttached(x, y, z)) break;
+        w.setBlock(x, y, z, B.AIR);
+        this.onLeafDecay(x, y, z, value);
+        break;
+      }
     }
   }
 

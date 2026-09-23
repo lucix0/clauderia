@@ -56,6 +56,8 @@ export function placementTarget(
  */
 export function placementValue(id: number, normal: readonly [number, number, number]): number | null {
   if (HAS_AXIS[id]) return normal[0] !== 0 ? id | (1 << 8) : normal[2] !== 0 ? id | (2 << 8) : id;
+  // Placed leaves are marked persistent so they never decay.
+  if (id === B.LEAVES || id === B.SPRUCE_LEAVES || id === B.BIRCH_LEAVES) return id | (1 << 8);
   if (id !== B.TORCH) return id;
   if (normal[1] === 1) return B.TORCH; // standing on the floor
   if (normal[1] === -1) return null; // no ceiling torches

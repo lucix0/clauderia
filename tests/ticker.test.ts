@@ -177,3 +177,22 @@ describe('plants and grass', () => {
     expect(w.get(9, 4, 10)).toBe(B.DIRT);
   });
 });
+
+describe('leaf decay', () => {
+  it('drops leaves cut off from their trunk, but never placed ones', () => {
+    const { w, t } = setup();
+    for (let y = 5; y < 9; y++) w.setBlock(10, y, 10, B.LOG);
+    for (let dx = -2; dx <= 2; dx++) for (let dz = -2; dz <= 2; dz++) if (dx || dz) w.setBlock(10 + dx, 8, 10 + dz, B.LEAVES);
+    w.setBlock(10, 9, 10, B.LEAVES);
+    w.setBlock(20, 6, 20, B.LEAVES | (1 << 8)); // placed by a player, far from any log
+    const decayed: number[] = [];
+    t.onLeafDecay = (_x, _y, _z, v) => decayed.push(v);
+    run(t, 300);
+    expect(count(w, B.LEAVES)).toBe(26); // still attached
+    for (let y = 5; y < 9; y++) w.setBlock(10, y, 10, B.AIR);
+    run(t, 600);
+    expect(count(w, B.LEAVES)).toBe(1);
+    expect(w.get(20, 6, 20)).toBe(B.LEAVES | (1 << 8));
+    expect(decayed.length).toBe(25);
+  });
+});

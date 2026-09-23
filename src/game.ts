@@ -50,6 +50,7 @@ import { BlockPicker } from './ui/picker';
 import { loadSettings, sanitizeSettings, saveSettings, type Settings } from './ui/settings';
 import { TitleScreen, type CreateWorldOptions } from './ui/title';
 import { randomSeed, seedFromString } from './util/prng';
+import { drops } from './survival/mining';
 import { Survivor } from './survival/survivor';
 import { DEATH_MESSAGES, exhaust, MAX_AIR } from './survival/vitals';
 import { BlockEntities } from './world/blockEntities';
@@ -551,6 +552,9 @@ export class Game {
       },
     };
     session.extrasFor = (chunk, remove) => this.chunkExtras(chunk, remove);
+    session.ticker.onLeafDecay = (x, y, z, value) => {
+      for (const st of drops(value, null, Math.random)) this.items.dropFromBlock(st, x, y, z);
+    };
     for (const rec of session.initialRecords) {
       loadItems(this.items, rec.extras.items);
       this.blockEntities.load(rec.extras.blockEntities);
