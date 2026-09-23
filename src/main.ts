@@ -12,6 +12,8 @@ declare global {
   interface Window {
     /** Set once the first world is meshed and rendered (used by the smoke test). */
     __ready?: boolean;
+    /** The running game, exposed in ?debug mode for tests and poking around. */
+    __game?: Game;
   }
 }
 
@@ -27,6 +29,7 @@ async function main(): Promise<void> {
   const seed = debug ? DEBUG_SEED : randomSeed();
 
   const game = new Game(canvas, ui);
+  if (debug) window.__game = game;
   const loading = new LoadingScreen(ui);
   loading.open('Generating level…');
   game.start();
@@ -39,13 +42,15 @@ async function main(): Promise<void> {
   await game.setWorld(world, (done, total) => loading.set('Building terrain', 0.8 + (0.2 * done) / total));
 
   const spawn = findSpawn(world.blocks, world.sx, world.sy, world.sz);
+  game.player.setSpawn(spawn.x, spawn.y, spawn.z);
+  game.player.respawn();
+  loading.close();
   if (debug) {
     game.setViewpoint(debugViewpoint(world));
+    game.enterPlayUnlocked();
   } else {
-    game.setViewpoint({ x: spawn.x, y: spawn.y + 1.62, z: spawn.z, yaw: 0, pitch: 0 });
+    game.showTitle();
   }
-  loading.close();
-  if (!debug) game.showClickToPlay();
   await game.nextFrame();
   window.__ready = true;
 }
