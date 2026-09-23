@@ -176,3 +176,19 @@ milestone.
   the step between neighbouring levels filled in (no corner smoothing).
 - Buckets only scoop sources; pouring replaces air, plants, snow layers
   and flowing fluid. Creative keeps the empty bucket.
+- **M7 mobs**: original cuboid designs (a spotted pig with ears and snout, a
+  shaggy dun cow with horns, a dark-faced sheep, a grey-green zombie with a
+  stitched mouth and rag tunic, a skeleton holding a bow, a dark spider with
+  a pale chevron). About one fresh grassy chunk in eight gets a herd of 2–4
+  animals; animals are saved with their chunk, hostiles vanish when their
+  chunk unloads. Hostiles spawn once a second (up to 6 tries) 24–56 blocks
+  away on a floor whose effective light is ≤ 7 (sky light minus up to 11 at
+  night, or block light), capped at 20; beyond 40 blocks they may despawn,
+  beyond 128 they always do. Zombies 3 damage, spiders 2, skeleton arrows 3
+  (Normal). Spiders are neutral where the light is above 7 unless hit.
+  Undead burn in full sunlight (sky 15). Mobs think 10 times a second, hop
+  up single steps, refuse drops over 3 blocks and lava while calm (but not
+  while chasing) and take fall damage. Hits: weapon attack damage (fist 1,
+  swords 4–7), knockback, half a second of invulnerability, 0.25 s between
+  swings; mob reach 3.5 blocks, checked before blocks. Hostiles also spawn in
+  Creative but ignore the player; Peaceful removes them.

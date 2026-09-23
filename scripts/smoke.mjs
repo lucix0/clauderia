@@ -433,14 +433,102 @@ try {
   });
   check(back.health === 20, 'survival: respawn restores health', JSON.stringify(back));
 
+  // Mobs: every kind lined up for a photo, then a night fight.
+  const lineup = await inf.evaluate(async () => {
+    const g = window.__game;
+    const w = g.currentWorld;
+    const s = g.player.spawn;
+    const x0 = Math.floor(s.x);
+    const z0 = Math.floor(s.z) - 8;
+    const y0 = 95;
+    for (let dx = -9; dx <= 9; dx++) for (let dz = -6; dz <= 6; dz++) w.setBlock(x0 + dx, y0, z0 + dz, 2);
+    // A leafy canopy: bright underneath, but not full sun, so the undead don't burn.
+    for (let dx = -9; dx <= 9; dx++) for (let dz = -3; dz <= 3; dz++) w.setBlock(x0 + dx, y0 + 4, z0 + dz, 16);
+    g.command('/time set noon');
+    g.command('/kill @e');
+    await new Promise((r) => setTimeout(r, 1200));
+    const kinds = ['pig', 'cow', 'sheep', 'zombie', 'skeleton', 'spider'];
+    const out = kinds.map((k, i) => g.command(`/summon ${k} ${x0 - 6.5 + i * 2.6} ${y0 + 1} ${z0 + 0.5}`));
+    const shown = g.mobs.list.filter((m) => m.dying < 0 && Math.abs(m.body.z - z0 - 0.5) < 1);
+    for (const m of shown) {
+      m.yaw = Math.PI + 0.45; // turned toward the camera
+      m.timer = 999;
+      m.mode = 'idle';
+      m.fire = 0;
+    }
+    g.setViewpoint({ x: x0 + 0.5, y: y0 + 3, z: z0 + 7.5, yaw: 0, pitch: -0.22 });
+    await new Promise((r) => setTimeout(r, 1500));
+    for (const m of shown) m.fire = 0;
+    return { out, count: shown.length };
+  });
+  check(lineup.count === 6, 'every mob kind can be summoned', JSON.stringify(lineup));
+  await inf.screenshot({ path: `${OUT}/mobs.png` });
+  const fight = await inf.evaluate(async () => {
+    const g = window.__game;
+    const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+    const waitSteps = async (n) => {
+      const start = g.stepCount;
+      for (let i = 0; i < 800 && g.stepCount - start < n; i++) await wait(50);
+    };
+    g.command('/kill @e');
+    await waitSteps(80);
+    g.command('/time set midnight');
+    g.command('/gamemode survival');
+    g.survivor.inventory.fill(null);
+    g.command('/give iron_sword');
+    g.select(0);
+    const b = g.player.body;
+    // Stand on the grass stage built for the lineup.
+    const s = g.player.spawn;
+    g.player.teleport(Math.floor(s.x) + 0.5, 96, Math.floor(s.z) - 8 + 3.5);
+    g.player.body.flying = false;
+    await waitSteps(30);
+    const hp = g.survivor.vitals.health;
+    // A zombie right in front: it attacks, then we fight back with the sword.
+    g.player.yaw = 0;
+    g.player.pitch = -0.2;
+    g.command(`/summon zombie ${b.x} ${b.y} ${b.z - 2.2}`);
+    const zombie = g.mobs.list[g.mobs.list.length - 1];
+    await waitSteps(90);
+    const hurt = hp - g.survivor.vitals.health;
+    let swings = 0;
+    for (let i = 0; i < 40 && zombie.dying < 0; i++) {
+      g.player.yaw = Math.atan2(-(zombie.body.x - b.x), -(zombie.body.z - b.z));
+      await g.nextFrame();
+      if (g.attackMob()) swings++;
+      await wait(300);
+    }
+    await waitSteps(80);
+    const killed = zombie.removed;
+    const sword = g.survivor.inventory[0];
+    // Peaceful clears hostiles.
+    g.command('/summon skeleton ~ ~ ~');
+    g.command('/difficulty peaceful');
+    await waitSteps(10);
+    const hostiles = g.mobs.hostileCount;
+    g.command('/difficulty normal');
+    g.command('/gamemode creative');
+    g.command('/time set noon');
+    g.survivor.respawn();
+    return { hurt, swings, killed, swordWear: sword?.damage ?? -1, hostiles };
+  });
+  check(fight.hurt > 0, 'a zombie hurts a survival player at night', JSON.stringify(fight));
+  check(fight.killed && fight.swordWear > 0, 'the player kills the zombie with a sword', JSON.stringify(fight));
+  check(fight.hostiles === 0, 'Peaceful removes hostile mobs', JSON.stringify(fight));
+
   await inf.evaluate(() => window.__game.setViewpoint({ x: window.__game.player.spawn.x, y: 90, z: window.__game.player.spawn.z, yaw: 0, pitch: -0.3 }));
   const flight = await inf.evaluate(async () => {
     const g = window.__game;
+    g.input.exitLock();
+    await new Promise((r) => setTimeout(r, 300));
+    g.enterPlayUnlocked();
     g.player.body.flying = true;
     g.player.yaw = -Math.PI / 2;
-    g.input.keys.add('KeyW');
     const x0 = g.player.body.x;
+    // Hold W (re-pressed in case a pointer-lock change releases keys).
+    const hold = setInterval(() => g.input.keys.add('KeyW'), 100);
     await new Promise((r) => setTimeout(r, 6000));
+    clearInterval(hold);
     g.input.keys.delete('KeyW');
     await new Promise((r) => setTimeout(r, 1500));
     const b = g.player.body;

@@ -16,9 +16,11 @@ import { CommandBar } from './ui/commandBar';
 import { WorkerPool } from './workers/pool';
 import { ItemEntities, loadItems, saveItem } from './entities/items';
 import { ItemRenderer } from './entities/itemRender';
+import { animalGroup, MOB_KINDS, Mobs, type MobKind, type MobTarget, type MobWorld } from './entities/mobs';
+import { createMobAtlas, MobRenderer } from './entities/mobRender';
 import { Container, type ContainerExtras, type Section } from './items/container';
 import { fuelTicks, furnaceSlotFor, SMELT_TICKS } from './items/smelting';
-import { HOTBAR_SLOTS, type ItemStack } from './items/inventory';
+import { HOTBAR_SLOTS, wearTool, type ItemStack } from './items/inventory';
 import { I, itemByName, itemDef, maxStack } from './items/items';
 import { BUTTON_LEFT, BUTTON_MIDDLE, BUTTON_RIGHT, Input } from './player/input';
 import { bodyOverlapsCell, type CollisionWorld } from './player/physics';
@@ -49,7 +51,7 @@ import { loadSettings, sanitizeSettings, saveSettings, type Settings } from './u
 import { TitleScreen, type CreateWorldOptions } from './ui/title';
 import { randomSeed, seedFromString } from './util/prng';
 import { Survivor } from './survival/survivor';
-import { DEATH_MESSAGES, MAX_AIR } from './survival/vitals';
+import { DEATH_MESSAGES, exhaust, MAX_AIR } from './survival/vitals';
 import { BlockEntities } from './world/blockEntities';
 import {
   B,
@@ -65,7 +67,7 @@ import {
   REPLACEABLE,
   SELECTABLE,
 } from './world/blocks';
-import { BIOME_KEYS, BIOMES } from './world/gen/biomes';
+import { BIOME, BIOME_KEYS, BIOMES } from './world/gen/biomes';
 import { infiniteGenerator } from './world/gen/infinite';
 import { breakBlock, placeBlock, placementTarget, placementValue, type Cell } from './world/placement';
 import type { Chunk } from './world/chunk';
@@ -130,6 +132,13 @@ export class Game {
   readonly items = new ItemEntities();
   /** Furnaces and chests. */
   readonly blockEntities = new BlockEntities();
+  /** Animals and monsters. */
+  readonly mobs = new Mobs();
+  readonly mobRenderer: MobRenderer;
+  /** The mob under the crosshair (closer than any block), if any. */
+  mobTarget: { mob: Mobs['list'][number]; t: number } | null = null;
+  private mobWorld: MobWorld | null = null;
+  private lastAttack = 0;
   readonly itemRenderer: ItemRenderer;
   readonly crack: CrackOverlay;
   readonly containerView: ContainerView;
@@ -191,6 +200,11 @@ export class Game {
       itemSprites: createEntityMaterial(this.atlas.itemTexture, 'item-sprite'),
     });
     this.scene.add(this.itemRenderer.group);
+    this.mobRenderer = new MobRenderer(createEntityMaterial(createMobAtlas(), 'mob'));
+    this.scene.add(this.mobRenderer.group);
+    this.mobs.events.died = (mob, loot) => {
+      for (const st of loot) this.items.spawn(st, mob.body.x, mob.body.y + 0.5, mob.body.z, (Math.random() - 0.5) * 2, 3, (Math.random() - 0.5) * 2, 0.5);
+    };
     this.crack = new CrackOverlay(this.atlas.texture);
     this.scene.add(this.crack.object);
     this.sky = new Sky(this.scene, this.atlas);
@@ -423,6 +437,31 @@ export class Game {
     this.items.clear();
     this.itemRenderer.clear();
     this.blockEntities.clear();
+    this.mobs.clear();
+    this.mobRenderer.clear();
+    this.mobWorld = null;
+  }
+
+  /** Grassy chunks sometimes get a small herd when first generated. */
+  private seedAnimals(chunk: Chunk): void {
+    if (Math.random() > 0.12) return;
+    const grassy = new Set<number>([BIOME.PLAINS, BIOME.FOREST, BIOME.TAIGA, BIOME.SWAMP, BIOME.MOUNTAINS]);
+    const lx = 2 + Math.floor(Math.random() * 12);
+    const lz = 2 + Math.floor(Math.random() * 12);
+    if (chunk.biomes && !grassy.has(chunk.biomes[(lz << 4) | lx]!)) return;
+    const { kind, count } = animalGroup(Math.random);
+    let placed = 0;
+    for (let i = 0; i < count * 3 && placed < count; i++) {
+      const x = Math.max(0, Math.min(15, lx + Math.floor(Math.random() * 5) - 2));
+      const z = Math.max(0, Math.min(15, lz + Math.floor(Math.random() * 5) - 2));
+      let y = 126;
+      while (y > 0 && chunk.blocks[(y << 8) | (z << 4) | x] === B.AIR) y--;
+      if ((chunk.blocks[(y << 8) | (z << 4) | x]! & 0xff) !== B.GRASS) continue;
+      this.mobs.spawn(kind, chunk.cx * 16 + x + 0.5, y + 1, chunk.cz * 16 + z + 0.5);
+      placed++;
+    }
+    // Make sure the chunk gets a record, so the herd isn't added again next visit.
+    if (placed) chunk.storedExtras = true;
   }
 
   /** Entities to store with a chunk (and, when unloading, take out of the world). */
@@ -430,6 +469,7 @@ export class Game {
     const extras = emptyExtras();
     extras.items = this.items.inChunk(chunk.cx, chunk.cz, remove).map(saveItem);
     extras.blockEntities = this.blockEntities.inChunk(chunk.cx, chunk.cz, remove);
+    extras.mobs = this.mobs.inChunk(chunk.cx, chunk.cz, remove);
     return extras;
   }
 
@@ -496,11 +536,28 @@ export class Game {
     this.items.clear();
     this.itemRenderer.clear();
     this.blockEntities.clear();
+    this.mobs.clear();
+    this.mobRenderer.clear();
+    const collide = this.collision!;
+    const sky = this.sky;
+    this.mobWorld = {
+      solidHeight: (x, y, z) => collide.solidHeight(x, y, z),
+      liquidAt: (x, y, z) => collide.liquidAt(x, y, z),
+      active: (x, z) => world.isActive(x, z),
+      blockId: (x, y, z) => world.getId(x, y, z),
+      light: (x, y, z) => world.lightAt(x, y, z),
+      get daylight() {
+        return sky.daylight;
+      },
+    };
     session.extrasFor = (chunk, remove) => this.chunkExtras(chunk, remove);
     for (const rec of session.initialRecords) {
       loadItems(this.items, rec.extras.items);
       this.blockEntities.load(rec.extras.blockEntities);
+      this.mobs.load(rec.extras.mobs);
     }
+    // A brand-new Classic world gets its animals now.
+    if (world.type === 'classic' && !session.record.player) for (const c of world.chunks.values()) this.seedAnimals(c);
     // A broken furnace or chest spills what it held.
     world.addListener((x, y, z, oldValue, newValue) => {
       const was = idOf(oldValue);
@@ -510,10 +567,15 @@ export class Game {
     });
     const streamer = new Streamer(world, this.pool, this.chunks, {
       loadRecord: (cx, cz) => session.loadRecord(cx, cz),
-      added: (_chunk, record) => {
-        if (!record) return;
+      added: (chunk, record) => {
+        if (!record) {
+          // First visit: maybe a group of animals on the grass.
+          this.seedAnimals(chunk);
+          return;
+        }
         loadItems(this.items, record.extras.items);
         this.blockEntities.load(record.extras.blockEntities);
+        this.mobs.load(record.extras.mobs);
       },
       unloaded: (chunks) => session.chunksUnloaded(chunks),
     });
@@ -962,6 +1024,7 @@ export class Game {
 
   private onButton(button: number): void {
     if (this.state !== 'playing') return;
+    if (button === BUTTON_LEFT && this.attackMob()) return;
     // Survival mining is continuous (see frame()); everything else acts on press.
     if (button === BUTTON_LEFT && this.survivor.survival) return;
     this.act(button);
@@ -1017,7 +1080,30 @@ export class Game {
         this.hud.render(this.survivor.inventory, this.survivor.selected);
         return `Gave ${count} × ${itemDef(id)!.name}`;
       },
+      summon: (kind, at) => {
+        if (!(MOB_KINDS as readonly string[]).includes(kind)) throw new CommandError(`Unknown mob. Try: ${MOB_KINDS.join(', ')}`);
+        let { x, y, z } = at;
+        const b = player.body;
+        if (x === b.x && y === b.y && z === b.z) {
+          // No position given: a few blocks in front.
+          const [dx, , dz] = player.viewDir();
+          const len = Math.hypot(dx, dz) || 1;
+          x += (dx / len) * 3;
+          z += (dz / len) * 3;
+        }
+        this.mobs.spawn(kind as MobKind, x, y, z, player.yaw + Math.PI);
+        return `Summoned a ${kind}`;
+      },
       kill: (target) => {
+        if (target === '@e' || (MOB_KINDS as readonly string[]).includes(target)) {
+          let n = 0;
+          for (const m of this.mobs.list) {
+            if (m.removed || m.dying >= 0 || (target !== '@e' && m.def.kind !== target)) continue;
+            this.mobs.kill(m);
+            n++;
+          }
+          return `Killed ${n} mob${n === 1 ? '' : 's'}`;
+        }
         if (target !== '@s' && target !== 'me') throw new CommandError('Nothing like that to kill');
         if (!this.survivor.survival) {
           this.player.respawn();
@@ -1093,6 +1179,28 @@ export class Game {
     }
   }
 
+  /** Hit the mob under the crosshair, if there is one. */
+  attackMob(): boolean {
+    const t = this.mobTarget;
+    const surv = this.survivor;
+    if (!t || surv.dead) return false;
+    const now = performance.now();
+    if (now - this.lastAttack < 250) return true;
+    this.lastAttack = now;
+    const held = surv.held;
+    const def = held ? itemDef(held.id) : undefined;
+    const damage = def?.attack ?? 1;
+    const b = this.player.body;
+    if (this.mobs.hit(t.mob, damage, b.x, b.z) && surv.survival) {
+      exhaustPlayer(surv, 0.1);
+      if (def?.tool) {
+        wearTool(surv.inventory, surv.selected, def.tool.kind === 'sword' ? 1 : 2);
+        this.hud.render(surv.inventory, surv.selected);
+      }
+    }
+    return true;
+  }
+
   /** Right click on an interactive block (crafting table). Sneaking skips it. */
   private useBlock(hit: RayHit): boolean {
     if (this.survivor.sneaking) return false;
@@ -1122,11 +1230,17 @@ export class Game {
     const world = this.world;
     if (!world || this.state !== 'playing') {
       this.target = null;
+      this.mobTarget = null;
       this.outline.set(null);
       return;
     }
     const p = this.camera.position;
     this.target = this.player.target(world, p.x, p.y, p.z);
+    const [dx, dy, dz] = this.player.viewDir();
+    this.mobTarget = this.mobs.raycast(p.x, p.y, p.z, dx, dy, dz, 3.5);
+    if (this.mobTarget && this.target && this.target.t < this.mobTarget.t) this.mobTarget = null;
+    // A mob in front of the block takes the click instead.
+    if (this.mobTarget) this.target = null;
     const t = this.target;
     if (!t) {
       this.outline.set(null);
@@ -1238,6 +1352,7 @@ export class Game {
     this.chunks.updateVisibility(this.camera.position, distance);
     if (world) {
       this.itemRenderer.update(this.items, alpha, now / 1000, pl.yaw, (x, y, z) => world.lightAt(x, y, z));
+      this.mobRenderer.update(this.mobs, alpha, now / 1000, (x, y, z) => world.lightAt(x, y, z));
       const eye = world.getVirtual(Math.floor(this.camera.position.x), Math.floor(this.camera.position.y), Math.floor(this.camera.position.z));
       this.hud.setVitals(surv.survival && !surv.dead ? surv.vitals : null, (eye & 0xff) === B.WATER || surv.vitals.air < MAX_AIR);
     }
@@ -1294,6 +1409,29 @@ export class Game {
       dt,
       alive ? { x: b.x, y: b.y, z: b.z, collect: (s) => surv.collect(s) } : null,
     );
+    const mw = this.mobWorld;
+    if (mw) {
+      const target: MobTarget = {
+        x: b.x,
+        y: b.y,
+        z: b.z,
+        attackable: surv.survival && alive,
+        hurt: (amount, fx, fz) => {
+          const dealt = surv.damage(amount, 'mob');
+          if (dealt > 0) {
+            // Knocked back away from the attacker.
+            const kx = b.x - fx;
+            const kz = b.z - fz;
+            const d = Math.hypot(kx, kz) || 1;
+            b.vx += (kx / d) * 7;
+            b.vz += (kz / d) * 7;
+            if (b.onGround) b.vy = 5;
+          }
+          return dealt;
+        },
+      };
+      this.mobs.update(mw, dt, target, surv.difficulty === 'peaceful');
+    }
     // Block behaviours and vitals tick at 20 Hz on the same fixed clock.
     this.stepCount++;
     if (this.session && this.stepCount % STEPS_PER_TICK === 0) {
@@ -1301,6 +1439,7 @@ export class Game {
       this.session.ticker.setFocus(b.x, b.z);
       this.session.ticker.step();
       surv.tick(world, b, eyeY);
+      if (mw) this.mobs.spawnTick(mw, b, 1 / 20, surv.difficulty !== 'peaceful');
       this.blockEntities.tick(
         (x, z) => world.isActive(x, z),
         (x, y, z, on) => {
@@ -1378,6 +1517,7 @@ export class Game {
               const t = Math.floor(this.session?.time ?? 0);
               return `Light: sky ${l >> 4}, block ${l & 15}   Time: ${t} (${formatClock(t)}) · daylight ${this.sky.daylight.toFixed(2)}${this.session?.lockDaytime ? ' · locked' : ''}`;
             })(),
+            `Entities: ${this.mobs.list.length} mobs (${this.mobs.hostileCount} hostile), ${this.items.list.length} items, ${this.mobs.arrows.length} arrows`,
             `Biome: ${(() => {
               const id = w.biomeAt(Math.floor(b.x), Math.floor(b.z));
               return id >= 0 ? BIOMES[id]!.name : w.type === 'classic' ? 'none (Classic)' : '—';
@@ -1409,6 +1549,10 @@ export function debugViewpoint(world: World, spawn: { x: number; z: number }): V
   const tx = cx + 8;
   const tz = cz - 16;
   return { x, y, z, yaw: Math.atan2(-(tx - x), -(tz - z)), pitch: -0.32 };
+}
+
+function exhaustPlayer(surv: Survivor, amount: number): void {
+  exhaust(surv.vitals, amount);
 }
 
 /** Feet height for standing on the highest solid ground of a column. */
