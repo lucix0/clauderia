@@ -144,7 +144,7 @@ export class Survivor {
     }
     const v = this.vitals;
     const dy = body.y - prevY;
-    if (body.flying || body.liquid) {
+    if (body.flying || body.liquid || body.climbing) {
       v.fallDistance = 0;
     } else if (!body.onGround && dy < 0) {
       v.fallDistance -= dy;

@@ -91,11 +91,17 @@ export const T = {
   WHEAT_FIRST: 103,
   FARMLAND_DRY: 111,
   FARMLAND_WET: 112,
+  DOOR_LOWER: 113,
+  DOOR_UPPER: 114,
+  /** Inventory pictures for blocks drawn flat there. */
+  DOOR_ITEM: 115,
+  LADDER: 116,
+  FENCE_ITEM: 117,
 } as const;
 
 export const CRACK_STAGES = 10;
 export const WHEAT_STAGES = 8;
-export const TILE_COUNT = T.FARMLAND_WET + 1;
+export const TILE_COUNT = T.FENCE_ITEM + 1;
 export const ATLAS_TILES_PER_ROW = 16;
 
 /** Block ids. Stored as bytes in the world array. */
@@ -156,9 +162,12 @@ export const B = {
   BED: 68,
   FARMLAND: 69,
   WHEAT: 70,
+  DOOR: 71,
+  LADDER: 72,
+  FENCE: 73,
 } as const;
 
-export const BLOCK_COUNT = 71;
+export const BLOCK_COUNT = 74;
 
 /**
  * Light-only id for a lit furnace (emits light; never stored in the world).
@@ -184,7 +193,7 @@ export function withState(id: number, state: number): number {
   return (id & ID_MASK) | ((state & 0xff) << 8);
 }
 
-export type Shape = 'none' | 'cube' | 'cross' | 'slab' | 'torch' | 'layer' | 'cactus';
+export type Shape = 'none' | 'cube' | 'cross' | 'slab' | 'torch' | 'layer' | 'cactus' | 'door' | 'ladder' | 'fence';
 /**
  * How a block's colour follows the biome: none, the column's grass /
  * foliage / water colour, or a fixed colour (0xRRGGBB).
@@ -201,6 +210,10 @@ export const SHAPE_TORCH = 4;
 export const SHAPE_LAYER = 5;
 /** Cube whose sides are inset by 1/16 (cactus). */
 export const SHAPE_CACTUS = 6;
+/** Doors, ladders and fences: boxes built from the state (and neighbours) in shapes.ts. */
+export const SHAPE_DOOR = 7;
+export const SHAPE_LADDER = 8;
+export const SHAPE_FENCE = 9;
 
 export const TINT_NONE = 0;
 export const TINT_GRASS = 1;
@@ -421,6 +434,12 @@ const specs: Record<number, BlockSpec> = {
   [B.FARMLAND]: { name: 'Farmland', tiles: column(T.DIRT, T.FARMLAND_DRY, T.DIRT) },
   // State: growth stage 0–7.
   [B.WHEAT]: { name: 'Wheat Crops', tiles: T.WHEAT_FIRST, shape: 'cross', plant: true },
+  // Shaped blocks: geometry and collision come from shapes.ts. Light passes through.
+  // Door state: facing (bits 0–1), open (4), upper half (8).
+  [B.DOOR]: { name: 'Door', tiles: T.DOOR_LOWER, shape: 'door', pass: 'cutout', solid: false, blocksLight: false, opacity: 0 },
+  // Ladder state: which way it leans off its wall (as wall torches, 1–4).
+  [B.LADDER]: { name: 'Ladder', tiles: T.LADDER, shape: 'ladder', pass: 'cutout', solid: false, blocksLight: false, opacity: 0 },
+  [B.FENCE]: { name: 'Fence', tiles: T.PLANKS, shape: 'fence', solid: false, blocksLight: false, opacity: 0 },
 };
 for (let i = 0; i < 16; i++) {
   specs[B.WOOL_FIRST + i] = { name: `${WOOL_NAMES[i]} Wool`, tiles: T.WOOL_FIRST + i };
@@ -468,6 +487,9 @@ const SHAPE_CODES: Record<Shape, number> = {
   torch: SHAPE_TORCH,
   layer: SHAPE_LAYER,
   cactus: SHAPE_CACTUS,
+  door: SHAPE_DOOR,
+  ladder: SHAPE_LADDER,
+  fence: SHAPE_FENCE,
 };
 const PASS_CODES: Record<RenderPass, number> = {
   opaque: PASS_OPAQUE,
@@ -553,6 +575,23 @@ export function frontTile(id: number, state: number): number {
   return FACE_TILES[id * 6 + 4]!;
 }
 
+/** Door state bits: swung open; the upper half. */
+export const DOOR_OPEN = 4;
+export const DOOR_UPPER = 8;
+
+/**
+ * Tile drawn flat for a block's inventory icon and dropped item (plants,
+ * torches, doors, ladders, fences), or −1 for a block drawn as a little cube.
+ */
+export function iconTile(id: number): number {
+  const shape = SHAPE[id];
+  if (shape === SHAPE_CROSS || shape === SHAPE_TORCH) return FACE_TILES[id * 6 + 2]!;
+  if (id === B.DOOR) return T.DOOR_ITEM;
+  if (id === B.LADDER) return T.LADDER;
+  if (id === B.FENCE) return T.FENCE_ITEM;
+  return -1;
+}
+
 /** Farmland state bit: moist. */
 export const FARMLAND_WET = 1;
 /** Last wheat growth stage (ripe). */
@@ -611,6 +650,7 @@ function isLeafId(id: number): boolean {
 export function restsOn(value: number, below: number): boolean {
   const id = value & ID_MASK;
   if (id === B.WHEAT) return below === B.FARMLAND;
+  if (id === B.DOOR) return (value >> 8) & DOOR_UPPER ? below === B.DOOR : supportsPlant(below);
   if (IS_PLANT[id] || (id === B.TORCH && value >> 8 === 0)) return supportsPlant(below);
   if (id === B.SNOW_LAYER) return supportsPlant(below) || isLeafId(below);
   if (id === B.CACTUS) return below === B.SAND || below === B.CACTUS;

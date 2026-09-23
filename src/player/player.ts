@@ -1,5 +1,6 @@
 import { PLAYER_EYE, REACH } from '../config';
 import { B, collisionHeight } from '../world/blocks';
+import { collisionBoxes, isShaped } from '../world/shapes';
 import type { World } from '../world/world';
 import { createBody, stepBody, type Body, type CollisionWorld, type MoveInput } from './physics';
 import { raycast, type RayHit } from './raycast';
@@ -22,6 +23,14 @@ export function collisionWorld(world: World): CollisionWorld {
     liquidAt(x, y, z) {
       const id = world.getVirtual(x, y, z) & 0xff;
       return id === B.WATER ? 1 : id === B.LAVA ? 2 : 0;
+    },
+    boxes(x, y, z) {
+      if (y < 0 || y >= world.height) return null;
+      const value = world.get(x, y, z);
+      return isShaped(value & 0xff) ? collisionBoxes(world, x, y, z, value) : null;
+    },
+    climbable(x, y, z) {
+      return world.getId(x, y, z) === B.LADDER;
     },
   };
 }

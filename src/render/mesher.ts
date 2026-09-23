@@ -26,6 +26,10 @@ import {
   SHAPE,
   SHAPE_CACTUS,
   SHAPE_CROSS,
+  SHAPE_DOOR,
+  SHAPE_FENCE,
+  SHAPE_LADDER,
+  DOOR_UPPER,
   SHAPE_LAYER,
   SHAPE_NONE,
   SHAPE_SLAB,
@@ -39,6 +43,7 @@ import {
   TORCH_ATTACH,
 } from '../world/blocks';
 import { fluidHeight } from '../world/fluids';
+import { doorBox, fenceDrawBoxes, fenceMask, ladderDrawBox, type Box6 } from '../world/shapes';
 import { PAD, padIndex, type PaddedSection } from './padded';
 
 export interface PassMesh {
@@ -519,6 +524,10 @@ function emitTorch(buf: QuadBuffer, x: number, y: number, z: number, tile: numbe
   );
 }
 
+/** For each face, the box coordinate (index into a Box6) that lies on the cell side, and its value there. */
+const SIDE_COORD = [3, 0, 4, 1, 5, 2];
+const SIDE_VALUE = [1, 0, 1, 0, 1, 0];
+
 /** Face on the other side of the cell: +X ↔ −X, +Y ↔ −Y, +Z ↔ −Z. */
 const OPPOSITE_FACE = [1, 0, 3, 2, 5, 4];
 
@@ -599,6 +608,28 @@ export function meshSection(pad: PaddedSection): ChunkMeshData {
         }
         if (shape === SHAPE_TORCH) {
           emitTorch(buf, x, y, z, FACE_TILES[id * 6 + 2]!, value >> 8, light[i]!);
+          continue;
+        }
+        if (shape === SHAPE_DOOR || shape === SHAPE_LADDER || shape === SHAPE_FENCE) {
+          const state = value >> 8;
+          let tile = FACE_TILES[id * 6]!;
+          let boxes: readonly Box6[];
+          if (shape === SHAPE_DOOR) {
+            boxes = [doorBox(state)];
+            tile = state & DOOR_UPPER ? T.DOOR_UPPER : T.DOOR_LOWER;
+          } else if (shape === SHAPE_LADDER) {
+            boxes = [ladderDrawBox(state)];
+          } else {
+            const nb = (f: number): number => blocks[i + PAD_OFFSETS[f]!]! & 0xff;
+            boxes = fenceDrawBoxes(fenceMask(nb(0), nb(1), nb(4), nb(5)));
+          }
+          for (const box of boxes) {
+            for (let f = 0; f < 6; f++) {
+              // Faces flush with the cell side are hidden by a solid neighbour.
+              if (box[SIDE_COORD[f]!] === SIDE_VALUE[f] && OCCLUDES[blocks[i + PAD_OFFSETS[f]!]! & 0xff]) continue;
+              emitBoxFace(buf, f, x, y, z, box, tile, FACE_BYTES[f]!, light[i]!);
+            }
+          }
           continue;
         }
         if (shape === SHAPE_CACTUS) {

@@ -283,7 +283,7 @@ export class World {
       for (let s = 1; s < TORCH_ATTACH.length; s++) {
         const [dx, dz] = TORCH_ATTACH[s]!;
         const v = this.get(x + dx, y, z + dz);
-        if (idOf(v) === B.TORCH && v >> 8 === s) this.setBlock(x + dx, y, z + dz, B.AIR);
+        if ((idOf(v) === B.TORCH || idOf(v) === B.LADDER) && v >> 8 === s) this.setBlock(x + dx, y, z + dz, B.AIR);
       }
     }
     return true;

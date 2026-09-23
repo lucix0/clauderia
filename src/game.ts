@@ -58,7 +58,6 @@ import { DEATH_MESSAGES, exhaust, MAX_AIR } from './survival/vitals';
 import { BlockEntities } from './world/blockEntities';
 import {
   B,
-  blockBounds,
   blockName,
   DEFAULT_HOTBAR,
   facingToward,
@@ -72,9 +71,20 @@ import {
 } from './world/blocks';
 import { BIOME, BIOME_KEYS, BIOMES } from './world/gen/biomes';
 import { infiniteGenerator } from './world/gen/infinite';
-import { bedFoot, breakBlock, placeBed, placeBlock, placementTarget, placementValue, type Cell } from './world/placement';
+import {
+  bedFoot,
+  breakBlock,
+  placeBed,
+  placeBlock,
+  placeDoor,
+  placementTarget,
+  placementValue,
+  toggleDoor,
+  type Cell,
+} from './world/placement';
 import { canSleepAt, monstersNear, SLEEP_FADE_S, SLEEP_S, WAKE_TIME } from './survival/sleep';
 import { fertilize, plantSeeds, till } from './world/farming';
+import { selectionBox } from './world/shapes';
 import type { Chunk } from './world/chunk';
 import type { World } from './world/world';
 
@@ -574,6 +584,7 @@ export class Game {
     this.mobWorld = {
       solidHeight: (x, y, z) => collide.solidHeight(x, y, z),
       liquidAt: (x, y, z) => collide.liquidAt(x, y, z),
+      boxes: (x, y, z) => collide.boxes!(x, y, z),
       active: (x, z) => world.isActive(x, z),
       blockId: (x, y, z) => world.getId(x, y, z),
       light: (x, y, z) => world.lightAt(x, y, z),
@@ -1252,7 +1263,13 @@ export class Game {
       if (HAS_FACING[id]) value = id | (facingToward(this.player.yaw) << 8);
       const cell = placementTarget(world, hit, normal, id);
       const overlaps = (c: Cell, h: number): boolean => bodyOverlapsCell(this.player.body, c.x, c.y, c.z, h);
-      const changed = id === B.BED ? placeBed(world, cell, facingToward(this.player.yaw), overlaps) : placeBlock(world, cell, value, overlaps);
+      const facing = facingToward(this.player.yaw);
+      const changed =
+        id === B.BED
+          ? placeBed(world, cell, facing, overlaps)
+          : id === B.DOOR
+            ? placeDoor(world, cell, facing, overlaps)
+            : placeBlock(world, cell, value, overlaps);
       if (changed) {
         surv.consumeHeld();
         this.sound.place(id, centre(changed));
@@ -1329,6 +1346,14 @@ export class Game {
       this.useBed(hit);
       return true;
     }
+    if (id === B.DOOR && this.world) {
+      const open = toggleDoor(this.world, hit);
+      if (open !== null) {
+        this.sound.door({ x: hit.x + 0.5, y: hit.y + 0.5, z: hit.z + 0.5 }, open);
+        this.edited(hit);
+      }
+      return true;
+    }
     return false;
   }
 
@@ -1394,7 +1419,7 @@ export class Game {
       this.outline.set(null);
       return;
     }
-    const b = blockBounds(t.id);
+    const b = selectionBox(world, t.x, t.y, t.z, world.get(t.x, t.y, t.z));
     this.outline.set([t.x + b[0], t.y + b[1], t.z + b[2], t.x + b[3], t.y + b[4], t.z + b[5]]);
   }
 

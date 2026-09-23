@@ -670,6 +670,89 @@ function farmland(t: Tile, rng: Rng, wet: boolean): void {
   }
 }
 
+const DOOR_WOOD = ['#9a7440', '#a27a45', '#93703d', '#a8814a'];
+
+/**
+ * Door halves: vertical boards in a frame, iron hinges on the left; the
+ * upper half has a four-pane window (see-through), the lower a latch.
+ */
+function door(t: Tile, rng: Rng, upper: boolean): void {
+  for (let y = 0; y < 16; y++) {
+    for (let x = 0; x < 16; x++) {
+      const board = x >> 2;
+      const c = hex(DOOR_WOOD[(board + (y >> 3)) % 4]!);
+      t.set(x, y, scale(c, 0.93 + rng.next() * 0.1 - (x % 4 === 0 ? 0.12 : 0)));
+    }
+  }
+  const frame = hex('#6a4e28');
+  for (let i = 0; i < 16; i++) {
+    t.set(0, i, frame);
+    t.set(15, i, frame);
+  }
+  for (let x = 0; x < 16; x++) t.set(x, upper ? 0 : 15, frame);
+  // Iron hinges on the left edge.
+  for (const hy of upper ? [3] : [11]) for (let x = 1; x < 4; x++) for (let y = hy; y < hy + 2; y++) t.set(x, y, hex('#5c5c60'));
+  if (upper) {
+    // Window: two by two panes in a cross of wood.
+    for (let y = 3; y < 12; y++) {
+      for (let x = 4; x < 13; x++) {
+        const bar = x === 8 || y === 7;
+        if (!bar) t.set(x, y, [0, 0, 0], 0);
+        else t.set(x, y, frame);
+      }
+    }
+  } else {
+    for (let x = 1; x < 15; x++) t.set(x, 6, scale(frame, 1.1)); // cross rail
+    t.set(12, 1, hex('#3a3a3e')); // latch
+    t.set(12, 2, hex('#8a8a90'));
+    t.set(13, 2, hex('#8a8a90'));
+  }
+}
+
+/** The whole door, narrow, for the inventory. */
+function doorItem(t: Tile, rng: Rng): void {
+  t.clear();
+  const frame = hex('#6a4e28');
+  for (let y = 0; y < 16; y++) {
+    for (let x = 4; x < 12; x++) {
+      // Four little panes in the top half.
+      const pane = (x === 5 || x === 6 || x === 9 || x === 10) && (y === 2 || y === 3 || y === 5 || y === 6);
+      if (pane) continue;
+      const edge = x === 4 || x === 11 || y === 0 || y === 15;
+      t.set(x, y, edge ? frame : scale(hex(DOOR_WOOD[x % 4]!), 0.95 + rng.next() * 0.08));
+    }
+  }
+  t.set(10, 10, hex('#3a3a3e'));
+}
+
+function ladder(t: Tile, rng: Rng): void {
+  t.clear();
+  const rail = (): RGB => scale(hex('#8a6a3a'), 0.9 + rng.next() * 0.15);
+  for (let y = 0; y < 16; y++) {
+    for (const x of [2, 3, 12, 13]) t.set(x, y, rail());
+  }
+  for (const ry of [1, 5, 9, 13]) {
+    for (let x = 4; x < 12; x++) {
+      t.set(x, ry, scale(hex('#9c7a45'), 0.95 + rng.next() * 0.1));
+      t.set(x, ry + 1, scale(hex('#6a5031'), 0.95 + rng.next() * 0.1));
+    }
+  }
+}
+
+function fenceItem(t: Tile, rng: Rng): void {
+  t.clear();
+  const wood = (): RGB => scale(hex('#a3824f'), 0.9 + rng.next() * 0.15);
+  for (let y = 1; y < 16; y++) for (const x of [2, 3, 12, 13]) t.set(x, y, x === 3 || x === 13 ? scale(wood(), 0.8) : wood());
+  for (const ry of [4, 10]) {
+    for (let x = 0; x < 16; x++) {
+      if (x >= 2 && x <= 3) continue;
+      if (x >= 12 && x <= 13) continue;
+      t.set(x, ry, wood());
+      t.set(x, ry + 1, scale(wood(), 0.75));
+    }
+  }
+}
+
 /** Crack overlay stage `n` (0–9): dark lines on transparent. */
 function crack(t: Tile, n: number): void {
   t.clear();
@@ -1148,6 +1231,11 @@ export function paintTile(id: number): Uint8ClampedArray<ArrayBuffer> {
     case T.BED_FOOT_END: bed(t, rng, 'footEnd'); break;
     case T.FARMLAND_DRY: farmland(t, rng, false); break;
     case T.FARMLAND_WET: farmland(t, rng, true); break;
+    case T.DOOR_LOWER: door(t, rng, false); break;
+    case T.DOOR_UPPER: door(t, rng, true); break;
+    case T.DOOR_ITEM: doorItem(t, rng); break;
+    case T.LADDER: ladder(t, rng); break;
+    case T.FENCE_ITEM: fenceItem(t, rng); break;
     default:
       if (id >= T.WOOL_FIRST && id < T.WOOL_FIRST + 16) wool(t, rng, WOOL_COLORS[id - T.WOOL_FIRST]!);
       else if (id >= T.CRACK_FIRST && id < T.CRACK_FIRST + CRACK_STAGES) crack(t, id - T.CRACK_FIRST);

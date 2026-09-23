@@ -4,6 +4,7 @@
  * ray/box test against the block's bounds.
  */
 import { blockBounds, SELECTABLE } from '../world/blocks';
+import { isShaped, selectionBox } from '../world/shapes';
 
 export interface RayHit {
   x: number;
@@ -24,6 +25,8 @@ export interface BlockSource {
   /** Block id (not the full value) at a cell. */
   getId(x: number, y: number, z: number): number;
   inBounds(x: number, y: number, z: number): boolean;
+  /** Full block value (id and state), for blocks whose shape depends on it (doors, fences). */
+  get?(x: number, y: number, z: number): number;
 }
 
 const NORMALS: ReadonlyArray<readonly [number, number, number]> = [
@@ -119,7 +122,7 @@ export function raycast(
     if (world.inBounds(x, y, z)) {
       const id = world.getId(x, y, z);
       if (id !== 0 && selectable(id)) {
-        const b = blockBounds(id);
+        const b = isShaped(id) && world.get ? selectionBox({ get: world.get.bind(world) }, x, y, z, world.get(x, y, z)) : blockBounds(id);
         const full = b[0] === 0 && b[1] === 0 && b[2] === 0 && b[3] === 1 && b[4] === 1 && b[5] === 1;
         if (full && face >= 0) {
           const n = NORMALS[face]!;

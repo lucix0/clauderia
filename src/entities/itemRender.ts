@@ -6,7 +6,7 @@
 import * as THREE from 'three';
 import { ITEM_FIRST } from '../items/items';
 import { ITEM_ATLAS_COLUMNS, ITEM_ATLAS_SLOTS } from '../render/itemTiles';
-import { FACE_TILES, PASS, SHAPE, SHAPE_CROSS, SHAPE_TORCH } from '../world/blocks';
+import { iconTile, PASS } from '../world/blocks';
 import type { ItemEntities } from './items';
 import { blockItemGeometry, blockTint, setGeometryLight, spriteGeometry, tileUV, type UVRect } from './models';
 
@@ -47,8 +47,8 @@ export class ItemRenderer {
     let sprite = true;
     if (id >= ITEM_FIRST) {
       mesh = new THREE.Mesh(spriteGeometry(itemAtlasUV(id), 0.4), this.materials.itemSprites);
-    } else if (SHAPE[id] === SHAPE_CROSS || SHAPE[id] === SHAPE_TORCH) {
-      mesh = new THREE.Mesh(spriteGeometry(tileUV(FACE_TILES[id * 6 + 2]!), 0.4, blockTint(id)), this.materials.blockSprites);
+    } else if (iconTile(id) >= 0) {
+      mesh = new THREE.Mesh(spriteGeometry(tileUV(iconTile(id)), 0.4, blockTint(id)), this.materials.blockSprites);
     } else {
       mesh = new THREE.Mesh(blockItemGeometry(id, 0.25), this.materials.blocks[PASS[id]!]!);
       sprite = false;

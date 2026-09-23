@@ -125,6 +125,9 @@ const BLOCK_FUEL: Record<number, number> = {
   [B.CHEST]: 300,
   [B.BOOKSHELF]: 300,
   [B.SAPLING]: 100,
+  [B.DOOR]: 200,
+  [B.LADDER]: 300,
+  [B.FENCE]: 300,
 };
 for (let id = 1; id < BLOCK_COUNT; id++) {
   if (!isValidBlock(id)) continue;

@@ -6,6 +6,8 @@ import {
   BED_HEAD,
   BED_HEAD_STEP,
   collisionHeight,
+  DOOR_OPEN,
+  DOOR_UPPER,
   HAS_AXIS,
   idOf,
   IS_LIQUID,
@@ -36,12 +38,45 @@ export function breakBlock(world: World, x: number, y: number, z: number): boole
   if (!canBreak(world, x, y, z)) return false;
   const value = world.get(x, y, z);
   if (!world.setBlock(x, y, z, B.AIR)) return false;
-  // A bed comes apart as a whole.
-  if (idOf(value) === B.BED) {
-    const other = bedPartner({ x, y, z }, value);
-    if (idOf(world.get(other.x, other.y, other.z)) === B.BED) world.setBlock(other.x, other.y, other.z, B.AIR);
+  // Beds and doors come apart as a whole.
+  const id = idOf(value);
+  if (id === B.BED || id === B.DOOR) {
+    const other = id === B.BED ? bedPartner({ x, y, z }, value) : { x, y: (value >> 8) & DOOR_UPPER ? y - 1 : y + 1, z };
+    if (idOf(world.get(other.x, other.y, other.z)) === id) world.setBlock(other.x, other.y, other.z, B.AIR);
   }
   return true;
+}
+
+/**
+ * Place a door with its lower half at `cell` (facing turns it toward the
+ * player). Needs two free cells, solid ground, and room clear of the player.
+ */
+export function placeDoor(world: World, cell: Cell, facing: number, overlapsPlayer: (cell: Cell, height: number) => boolean): Cell | null {
+  const upper = { x: cell.x, y: cell.y + 1, z: cell.z };
+  for (const c of [cell, upper]) {
+    if (!world.inBounds(c.x, c.y, c.z) || !isReplaceable(world.getId(c.x, c.y, c.z))) return null;
+    if (overlapsPlayer(c, 1)) return null;
+  }
+  if (!supportsPlant(world.getId(cell.x, cell.y - 1, cell.z))) return null;
+  const lower = B.DOOR | ((facing & 3) << 8);
+  if (!world.setBlock(cell.x, cell.y, cell.z, lower)) return null;
+  world.setBlock(upper.x, upper.y, upper.z, lower | (DOOR_UPPER << 8));
+  return cell;
+}
+
+/** Open a closed door or close an open one (both halves). Returns the new open state, or null. */
+export function toggleDoor(world: World, cell: Cell): boolean | null {
+  const value = world.get(cell.x, cell.y, cell.z);
+  if (idOf(value) !== B.DOOR) return null;
+  const lowerY = (value >> 8) & DOOR_UPPER ? cell.y - 1 : cell.y;
+  const lower = world.get(cell.x, lowerY, cell.z);
+  if (idOf(lower) !== B.DOOR) return null;
+  const open = ((lower >> 8) & DOOR_OPEN) === 0;
+  const flip = (v: number): number => (open ? v | (DOOR_OPEN << 8) : v & ~(DOOR_OPEN << 8));
+  world.setBlock(cell.x, lowerY, cell.z, flip(lower));
+  const upper = world.get(cell.x, lowerY + 1, cell.z);
+  if (idOf(upper) === B.DOOR) world.setBlock(cell.x, lowerY + 1, cell.z, flip(upper));
+  return open;
 }
 
 /** The other half of the bed whose half at `cell` has value `value`. */
@@ -112,14 +147,14 @@ export function placementValue(id: number, normal: readonly [number, number, num
   if (HAS_AXIS[id]) return normal[0] !== 0 ? id | (1 << 8) : normal[2] !== 0 ? id | (2 << 8) : id;
   // Placed leaves are marked persistent so they never decay.
   if (id === B.LEAVES || id === B.SPRUCE_LEAVES || id === B.BIRCH_LEAVES) return id | (1 << 8);
-  if (id !== B.TORCH) return id;
-  if (normal[1] === 1) return B.TORCH; // standing on the floor
-  if (normal[1] === -1) return null; // no ceiling torches
+  if (id !== B.TORCH && id !== B.LADDER) return id;
+  if (normal[1] === 1) return id === B.TORCH ? B.TORCH : null; // torches stand on the floor; ladders need a wall
+  if (normal[1] === -1) return null; // nothing hangs from ceilings
   const state = TORCH_ATTACH.findIndex(([dx, dz], i) => i > 0 && dx === normal[0] && dz === normal[2]);
-  return state > 0 ? B.TORCH | (state << 8) : null;
+  return state > 0 ? id | (state << 8) : null;
 }
 
-/** Is the block a torch in this cell would hang from / stand on still there? */
+/** Is the block a torch (or ladder) in this cell would hang from / stand on still there? */
 export function torchSupported(world: World, cell: Cell, value: number): boolean {
   const state = value >> 8;
   const [dx, dz] = TORCH_ATTACH[state] ?? [0, 0];
@@ -144,13 +179,15 @@ export function canPlace(
   const current = world.getId(x, y, z);
   const merging = id === B.SLAB && current === B.SLAB;
   if (!merging && !isReplaceable(current)) return false;
-  if (id === B.TORCH ? !torchSupported(world, cell, value) : !restsOn(value, world.getId(x, y - 1, z))) return false;
+  const attached = id === B.TORCH || id === B.LADDER;
+  if (attached ? !torchSupported(world, cell, value) : !restsOn(value, world.getId(x, y - 1, z))) return false;
   if (merging) return !overlapsPlayer(cell, 1);
   if (id === B.SLAB && world.getId(x, y - 1, z) === B.SLAB) {
     // Lands on the slab below and turns it into a double slab.
     return !overlapsPlayer({ x, y: y - 1, z }, 1);
   }
-  const h = collisionHeight(id);
+  // Fences collide through shapes.ts rather than a height; keep them out of the player too.
+  const h = id === B.FENCE ? 1 : collisionHeight(id);
   if (h > 0 && overlapsPlayer(cell, h)) return false;
   return true;
 }

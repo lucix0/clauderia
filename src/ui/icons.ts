@@ -1,10 +1,10 @@
 /**
  * Small isometric block icons drawn from the atlas canvas with 2D transforms.
- * Cross-shaped blocks get a flat sprite instead.
+ * Plants, torches, doors, ladders and fences get a flat picture instead.
  */
 import { ITEM_FIRST } from '../items/items';
 import { ITEM_ATLAS_COLUMNS } from '../render/itemTiles';
-import { ATLAS_TILES_PER_ROW, BLOCKS, SHAPE, SHAPE_CROSS, SHAPE_TORCH, shapeHeight } from '../world/blocks';
+import { ATLAS_TILES_PER_ROW, BLOCKS, iconTile, shapeHeight } from '../world/blocks';
 
 const TILE = 16;
 
@@ -40,8 +40,9 @@ export function renderIcon(atlas: HTMLCanvasElement, id: number, size: number): 
   if (!ctx || !def) return canvas;
   ctx.imageSmoothingEnabled = false;
 
-  if (SHAPE[id] === SHAPE_CROSS || SHAPE[id] === SHAPE_TORCH) {
-    const t = def.tiles[2];
+  const flat = iconTile(id);
+  if (flat >= 0) {
+    const t = flat;
     const pad = size * 0.08;
     ctx.drawImage(
       atlas,

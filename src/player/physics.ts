@@ -23,6 +23,13 @@ export interface CollisionWorld {
   solidHeight(x: number, y: number, z: number): number;
   /** Liquid in a cell: 0 none, 1 water, 2 lava. */
   liquidAt(x: number, y: number, z: number): number;
+  /**
+   * Collision boxes of a shaped cell (doors, fences, ladders) in cell units,
+   * or null to use solidHeight. Boxes may reach above the cell (fences).
+   */
+  boxes?(x: number, y: number, z: number): ReadonlyArray<readonly number[]> | null;
+  /** Can a body climb in this cell (ladders)? */
+  climbable?(x: number, y: number, z: number): boolean;
 }
 
 export interface Body {
@@ -42,6 +49,8 @@ export interface Body {
   /** Collision box size (the player's by default; items and mobs differ). */
   width: number;
   height: number;
+  /** On a ladder: falls slowly and climbs instead of jumping. */
+  climbing: boolean;
 }
 
 export interface MoveInput {
@@ -63,10 +72,13 @@ export interface MoveInput {
 }
 
 export function createBody(x: number, y: number, z: number, width = PLAYER_WIDTH, height = PLAYER_HEIGHT): Body {
-  return { x, y, z, vx: 0, vy: 0, vz: 0, onGround: false, hitWall: false, flying: false, liquid: 0, width, height };
+  return { x, y, z, vx: 0, vy: 0, vz: 0, onGround: false, hitWall: false, flying: false, liquid: 0, width, height, climbing: false };
 }
 
 const EPS = 1e-7;
+/** Blocks per second up a ladder, and the fastest slide down one. */
+export const CLIMB_SPEED = 2.4;
+export const CLIMB_SLIDE = 2.5;
 
 interface Box {
   minX: number;
@@ -94,6 +106,11 @@ function gatherBoxes(world: CollisionWorld, b: Box, dx: number, dy: number, dz: 
   for (let y = minY; y <= maxY; y++) {
     for (let z = minZ; z <= maxZ; z++) {
       for (let x = minX; x <= maxX; x++) {
+        const custom = world.boxes?.(x, y, z);
+        if (custom) {
+          for (const c of custom) out.push({ minX: x + c[0]!, minY: y + c[1]!, minZ: z + c[2]!, maxX: x + c[3]!, maxY: y + c[4]!, maxZ: z + c[5]! });
+          continue;
+        }
         const h = world.solidHeight(x, y, z);
         if (h > 0) out.push({ minX: x, minY: y, minZ: z, maxX: x + 1, maxY: y + h, maxZ: z + 1 });
       }
@@ -229,9 +246,26 @@ function approach(v: number, target: number, rate: number, dt: number): number {
   return v + (target - v) * (1 - Math.exp(-rate * dt));
 }
 
+/** Is any cell the body's lower half is in climbable? */
+function onClimbable(world: CollisionWorld, body: Body): boolean {
+  if (!world.climbable) return false;
+  const half = body.width / 2;
+  const x0 = Math.floor(body.x - half);
+  const x1 = Math.floor(body.x + half);
+  const z0 = Math.floor(body.z - half);
+  const z1 = Math.floor(body.z + half);
+  const y0 = Math.floor(body.y);
+  const y1 = Math.floor(body.y + body.height * 0.4);
+  for (let y = y0; y <= y1; y++) {
+    for (let z = z0; z <= z1; z++) for (let x = x0; x <= x1; x++) if (world.climbable(x, y, z)) return true;
+  }
+  return false;
+}
+
 /** Advance the body by one fixed step. */
 export function stepBody(world: CollisionWorld, body: Body, input: MoveInput, dt: number): void {
   body.liquid = body.flying ? 0 : liquidAround(world, body);
+  body.climbing = !body.flying && !body.liquid && onClimbable(world, body);
 
   // Wish direction on the ground plane.
   let fx = input.forward;
@@ -272,10 +306,18 @@ export function stepBody(world: CollisionWorld, body: Body, input: MoveInput, dt
     const speed = walk * (input.speed ?? 1);
     body.vx = approach(body.vx, wishX * speed, rate, dt);
     body.vz = approach(body.vz, wishZ * speed, rate, dt);
-    if (input.jump && body.onGround) body.vy = JUMP_VELOCITY;
-    // Exact parabola over the step (velocity Verlet) so jump height matches.
-    dy = body.vy * dt - 0.5 * GRAVITY * dt * dt;
-    body.vy = Math.max(-TERMINAL_VELOCITY, body.vy - GRAVITY * dt);
+    if (body.climbing) {
+      // Ladders: jump or push into the ladder to climb, sneak to hold on, else slide down slowly.
+      if (input.jump || (fx > 0 && body.hitWall)) body.vy = CLIMB_SPEED;
+      else if (input.sneak) body.vy = 0;
+      else body.vy = Math.max(body.vy - GRAVITY * dt, -CLIMB_SLIDE);
+      dy = body.vy * dt;
+    } else {
+      if (input.jump && body.onGround) body.vy = JUMP_VELOCITY;
+      // Exact parabola over the step (velocity Verlet) so jump height matches.
+      dy = body.vy * dt - 0.5 * GRAVITY * dt * dt;
+      body.vy = Math.max(-TERMINAL_VELOCITY, body.vy - GRAVITY * dt);
+    }
   }
 
   const wasOnGround = body.onGround;

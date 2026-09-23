@@ -37,6 +37,9 @@ export function materialOf(id: number): Material {
     case B.CRAFTING_TABLE:
     case B.CHEST:
     case B.BOOKSHELF:
+    case B.DOOR:
+    case B.LADDER:
+    case B.FENCE:
       return 'wood';
     case B.LEAVES:
     case B.SPRUCE_LEAVES:
@@ -289,6 +292,15 @@ export class Sound {
   arrowHit(at: At): void {
     const o = this.out(at, 0.45);
     if (o) this.burst(o.node, o.t, 0.06, 800, 2, 'bandpass');
+  }
+
+  /** A door swinging open (a creak) or shut (a knock). */
+  door(at: At, open: boolean): void {
+    const o = this.out(at, 0.5);
+    if (!o) return;
+    if (open) this.tone(o.node, o.t, 0.3, 240, 380, 'sawtooth', 0.12, 30);
+    else this.tone(o.node, o.t, 0.08, 150, 70, 'sine', 0.6);
+    this.burst(o.node, o.t + (open ? 0.2 : 0), 0.1, 700, 3, 'bandpass', 0.7);
   }
 
   /** A mob's voice: idle, hurt or death. */

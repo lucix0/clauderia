@@ -84,6 +84,9 @@ export const RECIPES: readonly Recipe[] = [
   shaped([' SX', 'S X', ' SX'], { S: I.STICK, X: I.STRING }, out(I.BOW)),
   shaped(['WWW', 'PPP'], { W: '#wool', P: '#planks' }, out(B.BED)),
   shaped(['WWW'], { W: I.WHEAT }, out(I.BREAD)),
+  shaped(['PP', 'PP', 'PP'], { P: '#planks' }, out(B.DOOR, 3)),
+  shaped(['S S', 'SSS', 'S S'], { S: I.STICK }, out(B.LADDER, 3)),
+  shaped(['PSP', 'PSP'], { P: '#planks', S: I.STICK }, out(B.FENCE, 3)),
   ...(Object.keys(TOOL_PATTERNS) as ToolKind[]).flatMap((kind) =>
     TIERS.map((_, t) => shaped(TOOL_PATTERNS[kind], { X: TIER_MATERIAL[t]!, S: I.STICK }, out(toolId(kind, t)))),
   ),

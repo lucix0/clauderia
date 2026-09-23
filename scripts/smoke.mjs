@@ -513,6 +513,61 @@ try {
   );
   await inf.evaluate(() => window.__game.nextFrame());
   await inf.screenshot({ path: `${OUT}/survival-farm.png` });
+  // Doors, ladders and fences: a little hut to walk through and climb.
+  const hut = await inf.evaluate(async () => {
+    const g = window.__game;
+    const w = g.currentWorld;
+    const b = g.player.body;
+    const x0 = Math.floor(b.x) + 2;
+    const z0 = Math.floor(b.z) + 6;
+    const y = 100;
+    for (let dx = -4; dx <= 4; dx++) for (let dz = -4; dz <= 5; dz++) w.setBlock(x0 + dx, y - 1, z0 + dz, 2);
+    // Walls three high around a 3×3 room, with a doorway in the south wall.
+    for (let dx = -2; dx <= 2; dx++) {
+      for (let dz = -2; dz <= 2; dz++) {
+        if (Math.abs(dx) !== 2 && Math.abs(dz) !== 2) continue;
+        for (let h = 0; h < 3; h++) w.setBlock(x0 + dx, y + h, z0 + dz, 5);
+      }
+    }
+    for (let dx = -2; dx <= 2; dx++) for (let dz = -2; dz <= 2; dz++) w.setBlock(x0 + dx, y + 3, z0 + dz, 5);
+    w.setBlock(x0, y, z0 + 2, 0);
+    w.setBlock(x0, y + 1, z0 + 2, 0);
+    // A fence along the front garden.
+    for (let dx = -4; dx <= 4; dx++) if (dx !== 0) w.setBlock(x0 + dx, y, z0 + 5, 73);
+    const kept = g.survivor.inventory[0];
+    g.survivor.inventory[0] = { id: 71, count: 1, damage: 0 };
+    g.select(0);
+    g.player.body.flying = true;
+    // Place the door from outside, looking north at the doorway floor.
+    g.player.teleport(x0 + 0.5, y, z0 + 4.5);
+    g.player.yaw = 0;
+    g.player.pitch = -Math.atan2(1.62, 2.1);
+    await g.nextFrame();
+    await g.nextFrame();
+    g.act(2);
+    const door = { lower: w.get(x0, y, z0 + 2), upper: w.get(x0, y + 1, z0 + 2) };
+    // Closed, it stops the player; open, they walk in.
+    g.player.body.flying = false;
+    g.player.teleport(x0 + 0.5, y, z0 + 3.6);
+    await g.nextFrame();
+    g.player.pitch = 0;
+    await g.nextFrame();
+    g.act(2); // opens it
+    const opened = (w.get(x0, y, z0 + 2) >> 8) & 4;
+    g.act(2); // and closes it again
+    g.survivor.inventory[0] = kept;
+    // A ladder up the east wall's outside.
+    for (let h = 0; h < 4; h++) w.setBlock(x0 + 3, y + h, z0, 72 | (1 << 8));
+    g.setViewpoint({ x: x0 + 6.5, y: y + 2.6, z: z0 + 6.5, yaw: Math.atan2(6, 5.5), pitch: -0.2 });
+    return { door, opened, x0, z0 };
+  });
+  check(
+    (hut.door.lower & 0xff) === 71 && (hut.door.upper & 0xff) === 71 && (hut.door.upper >> 8) & 8 && hut.opened === 4,
+    'doors are placed two tall and open with a click',
+    JSON.stringify(hut),
+  );
+  await inf.evaluate(() => window.__game.nextFrame());
+  await inf.screenshot({ path: `${OUT}/survival-hut.png` });
   const death = await inf.evaluate(async () => {
     const g = window.__game;
     const had = g.survivor.inventory.filter(Boolean).length;
