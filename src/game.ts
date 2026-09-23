@@ -1352,7 +1352,7 @@ export class Game {
     this.chunks.updateVisibility(this.camera.position, distance);
     if (world) {
       this.itemRenderer.update(this.items, alpha, now / 1000, pl.yaw, (x, y, z) => world.lightAt(x, y, z));
-      this.mobRenderer.update(this.mobs, alpha, now / 1000, (x, y, z) => world.lightAt(x, y, z));
+      this.mobRenderer.update(this.mobs, alpha, now / 1000, (x, y, z) => world.lightAt(x, y, z), this.camera.position, Math.min(distance, 80));
       const eye = world.getVirtual(Math.floor(this.camera.position.x), Math.floor(this.camera.position.y), Math.floor(this.camera.position.z));
       this.hud.setVitals(surv.survival && !surv.dead ? surv.vitals : null, (eye & 0xff) === B.WATER || surv.vitals.air < MAX_AIR);
     }

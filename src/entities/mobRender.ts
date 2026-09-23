@@ -182,8 +182,20 @@ export class MobRenderer {
     return { group, parts, tint: 0xffffff };
   }
 
-  update(mobs: Mobs, alpha: number, time: number, lightAt: (x: number, y: number, z: number) => number): void {
+  /**
+   * Sync models with the mob list. Mobs further than `maxDistance` from the
+   * camera aren't drawn (each is several draw calls).
+   */
+  update(
+    mobs: Mobs,
+    alpha: number,
+    time: number,
+    lightAt: (x: number, y: number, z: number) => number,
+    camera: { x: number; z: number },
+    maxDistance: number,
+  ): void {
     const alive = new Set<number>();
+    const max2 = maxDistance * maxDistance;
     for (const m of mobs.list) {
       if (m.removed) continue;
       alive.add(m.id);
@@ -196,6 +208,9 @@ export class MobRenderer {
       const x = m.prevX + (b.x - m.prevX) * alpha;
       const y = m.prevY + (b.y - m.prevY) * alpha;
       const z = m.prevZ + (b.z - m.prevZ) * alpha;
+      const far = (x - camera.x) ** 2 + (z - camera.z) ** 2 > max2;
+      s.group.visible = !far;
+      if (far) continue;
       s.group.position.set(x, y, z);
       s.group.rotation.set(0, m.yaw, m.dying >= 0 ? Math.min(1, m.dying / 0.45) * HALF_PI : 0);
       const light = lightAt(Math.floor(x), Math.floor(y + b.height * 0.6), Math.floor(z));

@@ -1,12 +1,13 @@
 # Blocktide
 
-A small, single-player block-building sandbox for the browser, in the spirit of
-the 2009-era creative "classic" block games: a fixed-size generated island
-world, first-person movement, and instant block breaking and placing from a
-palette of 47 blocks. All textures are generated procedurally at startup; there
-are no external assets, no backend and no sound.
+A single-player block sandbox for the browser: endless procedurally generated
+worlds with biomes, rivers, caves and ores, a day/night cycle with flood-fill
+lighting, and a survival mode with hunger, crafting, smelting, finite fluids
+and mobs. The original fixed-size "Classic" worlds are still there. Every
+texture, model and icon is generated in code at startup; there are no assets,
+no backend and no network access.
 
-Built with Vite + TypeScript (strict) + three.js (the only runtime dependency).
+Built with Vite + TypeScript (strict) + three.js, the only runtime dependency.
 
 ## Running it
 
@@ -14,196 +15,320 @@ Built with Vite + TypeScript (strict) + three.js (the only runtime dependency).
 npm install
 npm run dev        # dev server at http://localhost:5173
 npm run build      # typecheck + production build into dist/
-npm run preview    # serve dist/ at http://localhost:4173
+npm run preview    # serve dist/
 npm run typecheck  # tsc --noEmit
 npm test           # vitest unit tests
-npm run smoke      # build, then the headless Playwright smoke test (see below)
+npm run smoke      # build, then the headless Playwright smoke test (screenshots in artifacts/)
+npm run bench      # chunk pipeline throughput: generation, lighting, meshing (chunks/s)
 ```
 
 URL flags:
 
 | Flag | Effect |
 | --- | --- |
-| `?debug` | Fixed seed (1337), fixed camera, no click-to-play overlay, no saving. Sets `window.__ready = true` once the world is meshed and a frame has rendered, and exposes `window.__game`. |
-| `?size=small\|normal\|large` | World size used when a *new* world is generated at startup (default `normal`). |
+| `?debug` | Skips the title screen: a throwaway Creative world (seed 1337, noon, clock stopped, never saved), a fixed camera and `window.__game` for scripting. `window.__ready` turns true once the world is on screen. |
+| `?type=classic` | With `?debug`: a Classic world instead of an Infinite one. |
+| `?size=small\|normal\|large` | With `?debug&type=classic`: the Classic world size. |
+| `?api` | Exposes `window.__game` (and `__ready`) for normal, saved worlds. |
 
-## Controls
+## Playing
+
+The title screen lists your worlds (newest first). **Create new world** asks
+for a name, a seed (blank = random, text is hashed), the world type (Infinite
+or Classic, with a size), the game mode (Survival or Creative) and, for
+Survival, the difficulty (Normal or Peaceful). Worlds can be played or deleted
+(with a confirmation). An old single-slot save from the first version is
+converted into a Classic world automatically.
+
+### Controls
 
 | Input | Action |
 | --- | --- |
 | Click | Capture the mouse and play |
 | Mouse | Look |
-| `W` `A` `S` `D` | Move |
-| `Space` | Jump; swim up in water/lava; fly up |
-| `Shift` | Fly down |
-| `Z` | Toggle flying |
-| `R` | Respawn at the spawn point |
-| Left click (hold to repeat) | Break block |
-| Right click (hold to repeat) | Place the selected block against the targeted face |
-| Middle click | Copy the targeted block into the selected hotbar slot |
+| `W` `A` `S` `D` | Move; double-tap `W` to sprint |
+| `Space` | Jump; swim up; fly up |
+| `Shift` | Sneak (lower eyes, slower, won't walk off edges); fly down |
+| Left click | Survival: hold to mine (a crack shows progress), hit mobs. Creative: break instantly (hold to repeat) |
+| Right click | Place the held block; use a crafting table, furnace or chest (sneak to place against them instead); hold to eat food; buckets scoop / pour; bone meal grows saplings |
+| Middle click | Creative: copy the block into the selected slot. Survival: select it if it's on the hotbar |
 | `1`–`9`, mouse wheel | Select hotbar slot |
-| `B` | Block picker (click a block to put it in the selected slot) |
-| `F` | Cycle render distance (Tiny 32 → Short 64 → Normal 128 → Far 256 → Extreme 512) |
-| `F3` | Debug overlay (FPS, position, target, chunk rebuilds, draw calls) |
-| `Esc` | Pause menu (Resume, Save, Load, New World, Settings) |
+| `E` | Survival: inventory with a 2×2 crafting grid. Creative: every block and item |
+| `B` | Same as `E` |
+| `Q` | Drop one of the held item (`Ctrl+Q` the whole stack); over a slot in a screen, drop from that slot |
+| `Z` | Creative: toggle flying |
+| `R` | Creative: respawn at the world spawn |
+| `F` | Cycle render distance (4, 6, 8, 12, 16 chunks) |
+| `/` | Command bar |
+| `F3` | Debug overlay |
+| `Esc` | Pause menu: resume, save, settings, save & quit to the title screen |
+
+In inventory screens: left click picks up / puts down / swaps a stack, right
+click picks up half or puts down one, shift-click moves a stack to the other
+section (or crafts as many as possible from the result slot), clicking outside
+the panel throws what you're holding. Closing a crafting grid returns its
+contents to the inventory (or drops them).
+
+### Commands
+
+Typed in the `/` bar, or run from scripts with `window.__game.command('/…')`
+(`?debug` / `?api`). Coordinates accept `~` and `~n` (relative).
+
+| Command | Does |
+| --- | --- |
+| `/help` | List commands |
+| `/tp <x> <y> <z>` | Teleport |
+| `/gamemode <creative\|survival>` | Switch game mode |
+| `/time set <ticks\|day\|noon\|sunset\|night\|midnight\|sunrise>` | Set the time of day (24000 ticks = 20 minutes) |
+| `/give <item> [count]` | Items by name (`iron_ingot`, `diamond_pickaxe`, `oak_log`, `torch`…) |
+| `/setblock <x> <y> <z> <block>` | Place a block by name or id |
+| `/summon <pig\|cow\|sheep\|zombie\|skeleton\|spider> [x y z]` | Spawn a mob (in front of you by default) |
+| `/kill [@s\|@e\|<mob>]` | Kill yourself, every mob, or one kind |
+| `/seed` | Show the world seed |
+| `/biome` | The biome you're standing in |
+| `/locatebiome <name>` | Nearest patch of a biome, with coordinates you can `/tp` to |
+| `/difficulty <peaceful\|normal>` | Set the difficulty |
+
+F3 shows FPS and frame time, position, chunk and facing, the targeted block,
+section rebuilds, streaming (loaded / meshed chunks, busy workers, queued
+jobs), draw calls, triangles, sky and block light at your eyes, the time of
+day, entity counts (mobs, items, arrows) and the biome.
 
 ## What's in it
 
-**World** — Small 128², Normal 256² (default) or Large 512², all 64 tall, stored as
-one flat `Uint8Array`. Seeded, deterministic Classic-style generation running in
-a Web Worker: combined-octave noise heightmap around sea level (y = 32), dirt over
-stone on a bedrock floor, worm-style caves, coal/iron/gold veins by depth, ocean
-flood-filled inward from the map edges with an explicit stack (enclosed caves stay
-dry), lava pools near the bottom, sand and gravel shores, grass on exposed dirt,
-trees, and patches of flowers and mushrooms. Outside the map a flat ocean at sea
-level stretches to the horizon over a bedrock floor two blocks down; the map edges
-are walls. Even in headless, software-rendered Chromium a Normal world is
-generated, meshed and on screen in under two seconds.
+**Worlds.** *Infinite* worlds (the default) are unbounded in X and Z and 128
+blocks tall with the sea at y = 62. *Classic* worlds keep the original
+generator (Small 128², Normal 256², Large 512², 64 tall, an endless ocean
+outside the map) but now live in the same chunked storage.
 
-**Blocks** — A registry of 48 ids (air + 47 blocks) with per-face tiles, solidity,
-light blocking, render shape (cube / cross / slab) and render pass (opaque / cutout /
-translucent). Slab-on-slab merges into a double slab; flowers, mushrooms and
-saplings are X-shaped sprites that pop off when their support goes; water and lava
-are static, non-solid and swimmable; lava is always fully lit; the bottom bedrock
-layer can't be broken.
+**Chunks and streaming.** The world is a map of 16×16×128 chunk columns,
+meshed as 16³ sections and drawn as one merged geometry per column and render
+pass, with chunk-local vertex positions (so rendering is stable 100 000
+blocks from the origin). Negative coordinates use floor division and a
+positive modulo. A pool of 2–4 Web Workers generates, lights and meshes
+columns, nearest and in-view first, transferring typed arrays both ways;
+the main thread only copies neighbour borders and uploads finished meshes
+within a small per-frame budget. A column is meshed once all eight
+neighbours are generated and lit; chunks load within the render distance
+(default 8) plus a margin and unload further out. Player edits remesh
+immediately on the main thread. Nothing simulates in chunks that aren't
+loaded and lit, and the player waits for the ground to exist.
 
-**Rendering** — 32³ chunks, one merged `BufferGeometry` per chunk per pass, faces
-emitted only against air or non-occluding blocks, same-type transparent faces
-culled (glass–glass, water–water). Unlit `MeshBasicMaterial` with vertex colours
-carrying baked Classic lighting: 1.0 top, 0.8/0.6 sides, 0.5 bottom, × 0.6 when
-the cell a face looks into is below its column's light height. The height map is
-updated on every edit; dirty chunks are remeshed nearest-first within a 4 ms
-per-frame budget, the chunk the player edited is rebuilt immediately, border edits
-and light-height changes dirty their neighbours. Sky gradient, distance fog, dense
-blue/orange fog in water/lava, drifting cloud layer.
+**Generation.** A pure function of seed and chunk position (so chunks come out
+identical in any order). Continentalness decides oceans and coasts;
+temperature and humidity pick the land biome; an "erosion" field raises
+mountains; rivers follow the zero line of their own noise. Biome heights and
+colours are blended over a 33-block kernel so borders never form cliffs.
+Eleven biomes: ocean and deep ocean (sand, gravel and clay floors), beach,
+plains, forest (oak and birch), taiga (spruce), snowy tundra (snow layers,
+frozen water), desert (sand over sandstone, cacti, dead bushes), swamp
+(shallow murky water, low wide oaks), mountains (stone peaks, snow line) and
+rivers (frozen in the cold). 3D noise carves spaghetti tunnels and larger
+caverns, with lava below y = 10 and the odd cave mouth. Trees and ore veins
+(coal, iron, gold, deep diamonds, dirt and gravel pockets) are seeded per
+chunk and drawn by every chunk they reach. You spawn on dry land near the
+origin.
 
-**Textures** — 55 deterministic 16×16 tiles painted with a seeded PRNG into one
-canvas atlas (`NearestFilter`, no mipmaps, sRGB, inset UVs): dithered stone/dirt/
-sand, grass top and grass-over-dirt side, bark and rings, planks, outlined
-cobblestone, speckled ores, leaves and glass with transparent pixels, translucent
-water, bricks, wool in 16 colours, and so on. Hotbar/picker icons are isometric
-cubes drawn from the atlas with 2D canvas transforms.
+**Lighting.** Flood-fill sky light (0–15, falling straight down undimmed) and
+block light (torches 14, lava 15, a burning furnace 13), computed per column
+in the workers across chunk borders and updated incrementally on every edit
+(removal then re-add). Sky and block light are separate vertex attributes;
+a daylight uniform dims the sky in the shader, so the time of day never
+remeshes anything. Torch light is warm, moonlight slightly blue.
 
-**Player** — Pointer-lock first-person camera, fixed 60 Hz physics with an
-accumulator (long gaps clamped) and render interpolation. 0.6 × 1.8 × 0.6 box,
-eye at 1.62, walk 4.3 b/s, gravity 32 b/s², 1.25-block jump, collisions resolved
-one axis at a time against slab-aware boxes (no tunnelling, no wall sticking),
-slower movement in liquids, fly mode. Targeting is a voxel DDA raycast with 5-block
-reach and an outline around the target's bounds.
+**Day and night.** A 20-minute day: sun, moon and stars, a sky that fades
+through dusk and dawn, fog that follows the sky. The time is saved per
+world; a world can lock daytime (pause menu).
 
-**Block behaviours** — A 20 Hz tick on the same fixed clock drives the Classic
-rules: sand and gravel fall; water and lava spread without limit into air (down
-and sideways, lava six times slower), with at most 400 scheduled updates per tick
-so a flood can never stall a frame (the backlog simply waits); where water and
-lava meet the flow hardens into stone; digging into the map edge below sea level
-lets the outer ocean pour in; sponges clear water within 2 blocks and keep it out
-until removed; saplings grow into trees; grass spreads onto lit dirt and dies
-when a light-blocking block covers it. Updates are event-driven (a change wakes
-only the neighbours that can react) plus a few random surface-column ticks.
+**Blocks.** 67 blocks, including sandstone, snow block and snow layer,
+translucent ice, cactus (inset, and it hurts), dead bush, tall grass, clay,
+spruce and birch logs / leaves / planks, diamond ore and block, crafting
+table, furnace and chest. Block states: log axis, torch attachment, furnace
+facing and lit, fluid level. Grass, leaves, tall grass and water take their
+colour from the biome.
 
-**UI & saving** — Crosshair, 9-slot hotbar, block picker, pause menu with Save /
-Load / New World (size + seed; text seeds are hashed) / Settings (sensitivity, FOV,
-render distance, invert Y — persisted in `localStorage`), F3 overlay. Saves are a
-compact binary format (world blocks + size + seed, player position/orientation/
-spawn, hotbar) gzipped with `CompressionStream` into IndexedDB. Autosave every 60 s
-and whenever the game pauses; the last save is loaded on startup, otherwise a new
-Normal world with a random seed is generated.
+**Survival.** 20 health, 20 hunger (with saturation and exhaustion) and 10 air
+bubbles. Sprinting, jumping, mining and healing cost hunger; health
+regenerates when well fed and starving stops at half a heart. Damage from
+falls (over 3 blocks), drowning, lava (with lingering fire that water puts
+out), cacti, suffocation and mobs, with a moment of invulnerability,
+knockback, a red flash and a camera shake. Dying shows a death screen; your
+inventory spills where you fell and you respawn at the world spawn.
+
+**Items, mining and crafting.** Items are separate from blocks: sticks, coal,
+charcoal, iron and gold ingots, diamonds, apples, raw and cooked pork and
+beef, bones, bone meal, string and buckets, plus pickaxes, axes, shovels and
+swords in wood, stone, iron, gold and diamond. Stacks of 64; tools stack
+alone and wear out. Mining time depends on the block's hardness and the tool;
+some drops need a good enough pickaxe (iron needs stone, gold and diamond
+need iron). Stone drops cobblestone, grass dirt, leaves sometimes a sapling or
+an apple, glass nothing. Recipes are data (shaped, anywhere in the grid and
+mirrored; shapeless; tags such as "any planks"): planks, sticks, crafting
+table, torches, every tool, furnace, chest, bucket, storage blocks, white
+wool from string, bone meal, sandstone, slabs. Sponge, bedrock and coloured
+wool are Creative-only.
+
+**Furnaces, chests, fluids.** Furnaces burn fuel and smelt ores into ingots,
+sand into glass, cobblestone into stone, logs into charcoal, clay into bricks
+and raw meat into cooked, and keep going while their chunk is loaded. Chests
+hold 27 stacks. Both are saved with their chunk and spill their contents
+when broken. In Infinite worlds water and lava are finite: sources and
+levels, water spreading 7 blocks and lava 3 (slower), both heading for the
+nearest drop, drying up without a source; two water sources make a third;
+lava turns to obsidian or cobblestone where water meets it. Lower levels are
+drawn lower. Buckets scoop up and pour sources. Classic worlds keep their old
+unlimited fluids.
+
+**Dropped items.** Items bob, drift toward you to be picked up, merge with
+their neighbours and vanish after five minutes; they are saved with their
+chunk.
+
+**Mobs.** Pigs, cows and sheep arrive in herds with freshly generated grassy
+chunks, wander, and flee when hit; they drop pork, beef and wool. At night
+and in dark caves, zombies (melee), skeleton archers (keep their distance,
+shoot arcing arrows, drop bones) and spiders (fast, climb walls, neutral in
+daylight, drop string) spawn at least 24 blocks away, up to 20 at a time,
+and despawn when far away; the undead burn in sunlight. Mobs hop up steps,
+avoid drops and lava while calm, and are cuboid models with procedural skins
+and walking animations — original designs, not copies. Hit them with
+whatever's in your hand; they flash, get knocked back, topple over and drop
+loot. Peaceful has no hostile mobs.
+
+**Saving.** IndexedDB (`blocktide`, version 2): a world record (name, seed,
+type, size, game mode, difficulty, time, daytime lock, spawn, player with
+inventory and vitals) and one gzipped binary record per changed chunk
+(blocks when they differ from generation, plus JSON for block entities,
+dropped items and animals). Writes are batched into one transaction; chunks
+are saved when they unload, when the game pauses, every minute and when
+quitting to the title screen.
 
 ## Code layout
 
 ```
 src/
-  main.ts, game.ts, config.ts, style.css
-  util/     prng.ts (sfc32), noise.ts (gradient / octave / combined noise)
-  world/    blocks.ts (registry), world.ts (storage + setBlock), heightmap.ts,
-            generator.ts, gen.worker.ts, generate.ts, trees.ts, placement.ts,
-            sizes.ts, flat.ts
-  render/   tiles.ts (pixel painters), atlas.ts, mesher.ts, chunks.ts,
-            materials.ts, sky.ts, outline.ts
-  player/   input.ts, physics.ts, raycast.ts, player.ts
-            ticker.ts (M5 block behaviours)
-  ui/       hud.ts, icons.ts, picker.ts, menu.ts, loading.ts, debug.ts,
-            settings.ts, dom.ts
-  save/     serialize.ts, compress.ts, storage.ts
-tests/      unit tests for the pure modules
-scripts/    smoke.mjs (Playwright)
+  main.ts, game.ts (loop, input, glue), session.ts (a loaded world + saving), config.ts
+  world/     coords, chunk, world (storage, setBlock), blocks (registry), light, lightRegion,
+             fluids, blockEntities, ticker (block behaviours), placement, trees,
+             generator / heightmap / generate (Classic), gen/biomes + gen/infinite
+  stream/    streamer (what to generate, light, mesh, upload, unload)
+  workers/   pool, protocol, chunk.worker (generate / light / mesh jobs)
+  render/    tiles + itemTiles (pixel painters), atlas, mesher, meshInput, padded, chunks,
+             materials (voxel light shader), sky, crack, outline
+  items/     items (registry), inventory, recipes, smelting, container (screen logic)
+  survival/  vitals, mining, survivor (the survival player)
+  entities/  items (dropped items), mobs (mobs, AI, spawning, arrows), models,
+             mobTextures, itemRender, mobRender
+  player/    input, physics (shared by the player, items and mobs), raycast, player
+  save/      records (format v2), db (IndexedDB), migrate (v1 → Classic), serialize, compress
+  commands/  commands (pure: parsing and dispatch)
+  ui/        title, hud, containerView, picker (creative), death, menu, commandBar, debug,
+             loading, settings, icons, statusIcons, dom
+tests/       unit tests
+scripts/     smoke.mjs (Playwright), bench.ts / bench.mjs
 ```
 
-The mesher, raycast, physics, generator, ticker, tile painters, placement rules
-and save serialisation are pure (no three.js, no DOM) and unit-tested. Every block
-change goes through `World.setBlock`, which updates the light height map, marks
-dirty chunks and applies neighbour effects.
+Everything except rendering and UI is pure (no three.js, no DOM) and tested.
+Every block change goes through `World.setBlock`, which updates light, marks
+sections dirty and applies neighbour effects (slab merging, things popping off
+without support).
 
 ## Tests
 
-`npm test` covers world indexing and `setBlock` side effects, mesher culling (two
-adjacent cubes → 10 faces, same-type transparent culling, slabs, sprites, baked
-shading), raycast hit block and face (including slabs and plants), collision
-(landing, no tunnelling, walls, map edges, ceilings, jump height, slab step-up,
-swimming, flying, can't place inside yourself), save round-trip (with gzip),
-determinism (same seed → identical world), spawn on dry land, and the block
-behaviours (falling sand, unlimited water spread, slower lava, the per-tick cap,
-water + lava → stone, edge-ocean inflow, sponges, sapling growth, grass spread and
-death).
+`npm test` (≈170 tests) covers, among others: negative-coordinate math and chunk
+keys; that the same seed gives identical chunks and that a 3×3 area generated
+in two different orders is identical; continuous heights across chunk and
+biome borders; biome variety and `/locatebiome`; trees crossing chunk borders;
+ore depths; light spreading and incremental removal across chunk borders
+(checked against a full recompute); meshing (culling, slabs, snow layers,
+cacti, rotated logs, tints, light attributes); recipe matching (offset,
+mirrored, shapeless, tags) and crafting through the container; inventory
+stack operations; mining times and tier-gated drops; fall damage, drowning,
+burning, cactus, starvation and regeneration timers; eating; finite fluid
+spread, drying, drops, new sources and lava/water reactions; furnace smelting
+and fuel use; block entity and save v2 round trips and the v1 migration;
+item entities; sneaking at edges; mob combat, AI, archery, spawning rules,
+sunlight and saving; commands.
 
-`npm run smoke` builds, serves `dist/` with `vite preview`, opens `?debug` in
-headless Chromium (software GL via SwiftShader), fails on any console error, walks,
-breaks and places a block, checks the F3 overlay, underwater fog and the picker,
-then checks that a Small world survives a page reload via IndexedDB. Screenshots
-land in `artifacts/`. Set `CHROMIUM_PATH` to use a specific Chrome binary;
-otherwise run `npx playwright install chromium` once.
+`npm run smoke` builds, serves `dist/` and drives headless Chromium (software
+GL through SwiftShader), failing on any console error. It checks a Classic
+world (walking, breaking, placing, F3, underwater fog, the creative
+inventory), then an Infinite world: noon and midnight, a torch-lit cave,
+every biome found with `/locatebiome` and photographed, a survival round
+(crafting planks, sticks and a pickaxe through the screens, mining with
+pickup, fall damage, a bucket, death and respawn), every mob lined up and a
+night fight with a zombie, streaming while flying and 100 000 blocks out;
+then the title screen (create, save & quit, reload, delete), an Infinite world
+whose edits, chest contents and dropped items survive unloading and a reload,
+and the v1 save migration. Screenshots land in `artifacts/`. Set
+`CHROMIUM_PATH` to use a specific Chrome; otherwise run
+`npx playwright install chromium` once.
+
+`npm run bench` measures single-threaded generation, lighting and meshing
+throughput (at the time of writing: ~560 chunks/s generated including the
+biome data of their neighbours, ~300 lit, ~1000 meshed).
 
 ## Judgement calls
 
 Things the brief left open, and what I chose:
 
-- **Chunk size 32³** rather than 16³: a Normal world is 128 chunks, so a full view
-  is roughly 150–250 draw calls; a chunk still remeshes in about a millisecond.
-- **Leaves** are cutout but faces between two leaf blocks are kept (a "fancy
-  leaves" look, so canopies aren't hollow); glass–glass and water–water are culled.
-- **What blocks light**: every full cube including leaves and water (so trees cast
-  shadows and sea floors are shaded), plus slabs; glass and plants don't. Lava
-  blocks light but its own faces are always full-bright.
-- **Slabs** can be walked up without jumping (0.5-block step height).
-- **Plants** need a full solid block underneath to be placed and pop off when it
-  goes. Mushrooms generate on dark cave floors plus a few surface patches.
-- **Liquids** can't be targeted (the ray passes through), and blocks can be placed
-  into liquid cells. Water, lava, bedrock and the double slab are in the picker.
-- **Middle click** copies the block into the *selected* slot as specified, even if
-  it's already elsewhere on the hotbar.
-- **Default render distance** is Far (256) with linear fog starting at 30 %.
-- **Pointer lock**: Chrome refuses to re-lock for about a second after `Esc`; when
-  that happens the "Click to play" overlay comes back and the next click works.
-  Mouse presses within 200 ms of gaining lock are ignored, so the resuming click
-  never breaks or places.
-- **Saving** uses one slot. `?debug` never saves or loads.
-- **Liquids** follow the Classic "unlimited" rule literally: a source placed in
-  mid-air spreads sideways forever as well as down, so it floods the map at that
-  level. Water meeting lava turns the contact cell to stone (not in the brief, but
-  it keeps the two from sitting side by side forever).
-- **Grass** counts as covered when the block directly above blocks light (so a
-  slab or dirt kills it, glass doesn't). Dirt turns green when sunlight reaches
-  it and grass is within the 3×5×3 neighbourhood Classic used; saplings need
-  sunlight, grass/dirt below and room for the canopy.
-- **Timings**: water spreads a block every 0.25 s, lava every 1.5 s, sand falls
-  10 blocks/s; placed saplings try to grow after 5–20 s, covered grass dies after
-  2–6 s and exposed dirt near grass greens after 3–10 s.
+- **New worlds default to Infinite and Survival.** `?debug` is Creative.
+- **Biomes**: eleven, listed above; heights come from continuous fields with
+  per-biome offset / hill size / flatness blended over 33 blocks, so borders
+  are gentle. Rivers fade out at coasts and in mountains rather than carving
+  canyons through peaks. Strong cave tunnels may open at the surface; trees
+  are never placed over one.
+- **Tints**: grass, leaves, tall grass and water textures are grey and
+  multiplied by a per-vertex biome colour; on the grass block only the fringe
+  of the side (marked in the texture's alpha) is tinted. Spruce and birch
+  leaves have fixed colours. Classic worlds keep their original look.
+- **Light**: sky light passes down through air undimmed and loses one level
+  per block sideways; leaves dim by 1, water and ice by 2. Night takes up to
+  11 levels off sky light in the shader (moonlight keeps 4). Faces are still
+  shaded by direction as in Classic.
+- **Minecraft-like numbers** for mining, hunger, damage and fuel (see
+  `survival/mining.ts`, `survival/vitals.ts`, `items/smelting.ts`), with
+  starving stopping at half a heart on Normal.
+- **Eating** takes 1.6 s of holding right click; food isn't eaten when full.
+- **Right click on a crafting table, furnace or chest** opens it; sneak to
+  place a block against it instead. Bone meal grows a sapling at once.
+- **Bookshelves** drop three planks; ice and glass drop nothing; snow blocks
+  need a shovel; double slabs drop two slabs.
+- **Finite fluids** are per-cell levels without corner smoothing: lower levels
+  render as lower steps. Two adjacent water sources make new sources (so a
+  dug-out ocean edge refills).
+- **Buckets** only scoop sources; Creative keeps the empty bucket.
+- **Mobs**: about one grassy chunk in eight gets a herd; animals are saved,
+  hostiles aren't (they despawn with their chunk). Hostiles also spawn in
+  Creative but ignore you. Mobs are drawn up to 80 blocks away.
+- **Dropped items** despawn after five minutes of simulated time (time in
+  unloaded chunks doesn't count).
+- **Liquids** can't be targeted except by buckets; blocks can be placed into
+  them.
+- **Pointer lock**: Chrome refuses to re-lock for about a second after `Esc`;
+  when that happens the "Click to play" overlay comes back and the next click
+  works. `?debug` just carries on unlocked.
 
 ## Known issues
 
-- Headless / software-GL runs are slow (≈5 FPS under SwiftShader); real GPUs are
-  what the 60 FPS target is about. I could only verify performance numbers
-  (≈1 ms per chunk remesh, ~200 draw calls at Far) — not a real integrated GPU.
-- Translucent water is sorted per chunk, not per face; looking through two water
-  surfaces at once can occasionally blend in the wrong order.
-- Pending block updates aren't saved: a flood or falling sand that was mid-way
-  when you saved sits still after loading until something next to it changes.
-- `beforeunload` saves are best-effort (IndexedDB writes can be cut off when the
-  tab closes); the 60 s autosave and the save on pause are the reliable ones.
+- Performance numbers were only measured under SwiftShader (software GL) in
+  a headless browser, where rendering is the bottleneck (a settled frame
+  costs ~8 ms of JavaScript at render distance 8). I couldn't verify 60 FPS
+  on a real GPU from here; the design (one draw call per column and pass,
+  worker meshing, no remesh for time of day) is aimed at it.
+- Each visible mob is several draw calls (one per body part); dozens of mobs
+  in view cost a few hundred draw calls.
+- Translucent water is sorted per column, not per face, so looking through
+  two water surfaces can occasionally blend in the wrong order.
+- Pending block updates (a flowing fluid, falling sand) aren't saved; they
+  resume when something next to them changes.
+- Water doesn't push the player or items along its flow.
+- `pagehide` saves are best-effort; the autosave every minute, the save on
+  pause and "Save & quit" are the reliable ones.
 
 ## Next steps
 
-- Greedy-free but smarter meshing (e.g. skip fully buried chunks early), and
-  occlusion culling for cave chunks.
-- Multiple save slots with thumbnails; export/import of save files.
-- Smooth lighting / ambient occlusion as an option.
+- Smooth lighting / ambient occlusion, leaf decay, farming, a bow, beds,
+  doors / ladders / fences and procedural sound (the stretch list).
+- Merge mob parts into one skinned geometry per mob; instanced items.
+- Corner-smoothed fluid surfaces and currents.
+- Greedy meshing for distant columns; occlusion culling for caves.
