@@ -17,9 +17,11 @@ export function materialOf(id: number): Material {
     case B.DANDELION:
     case B.ROSE:
     case B.DEAD_BUSH:
+    case B.WHEAT:
       return 'grass';
     case B.DIRT:
     case B.CLAY:
+    case B.FARMLAND:
       return 'dirt';
     case B.SAND:
     case B.SANDSTONE:

@@ -30,6 +30,7 @@ import {
   SHAPE_NONE,
   SHAPE_SLAB,
   SHAPE_TORCH,
+  stateTile,
   T,
   TINT_COLOR,
   TINT_FIXED,
@@ -593,7 +594,7 @@ export function meshSection(pad: PaddedSection): ChunkMeshData {
         } else setTint(DEFAULT_TINTS[tintMode]!);
 
         if (shape === SHAPE_CROSS) {
-          emitCross(buf, x, y, z, FACE_TILES[id * 6 + 2]!, light[i]!);
+          emitCross(buf, x, y, z, stateTile(id, value >> 8, FACE_TILES[id * 6 + 2]!), light[i]!);
           continue;
         }
         if (shape === SHAPE_TORCH) {
@@ -657,6 +658,8 @@ export function meshSection(pad: PaddedSection): ChunkMeshData {
             }
           } else if (front >= 0 && f !== 2 && f !== 3) {
             tile = f === front ? frontTile(id, value >> 8) : FACE_TILES[id * 6]!;
+          } else if (id === B.FARMLAND) {
+            tile = stateTile(id, value >> 8, tile);
           }
           if (pad.smooth && top === 1 && !fullBright && !liquid) {
             emitSmoothFace(buf, f, x, y, z, tile, FACE_BYTES[f]!, ni, blocks, light, turn);

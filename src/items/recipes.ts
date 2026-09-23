@@ -53,6 +53,7 @@ const TOOL_PATTERNS: Record<ToolKind, string[]> = {
   axe: ['XX', 'XS', ' S'],
   shovel: ['X', 'S', 'S'],
   sword: ['X', 'X', 'S'],
+  hoe: ['XX', ' S', ' S'],
 };
 const TIER_MATERIAL: Ingredient[] = ['#planks', B.COBBLESTONE, I.IRON_INGOT, I.GOLD_INGOT, I.DIAMOND];
 
@@ -82,6 +83,7 @@ export const RECIPES: readonly Recipe[] = [
   shaped(['F', 'S'], { F: I.FLINT, S: I.STICK }, out(I.ARROW, 4)),
   shaped([' SX', 'S X', ' SX'], { S: I.STICK, X: I.STRING }, out(I.BOW)),
   shaped(['WWW', 'PPP'], { W: '#wool', P: '#planks' }, out(B.BED)),
+  shaped(['WWW'], { W: I.WHEAT }, out(I.BREAD)),
   ...(Object.keys(TOOL_PATTERNS) as ToolKind[]).flatMap((kind) =>
     TIERS.map((_, t) => shaped(TOOL_PATTERNS[kind], { X: TIER_MATERIAL[t]!, S: I.STICK }, out(toolId(kind, t)))),
   ),

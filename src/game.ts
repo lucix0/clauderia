@@ -74,6 +74,7 @@ import { BIOME, BIOME_KEYS, BIOMES } from './world/gen/biomes';
 import { infiniteGenerator } from './world/gen/infinite';
 import { bedFoot, breakBlock, placeBed, placeBlock, placementTarget, placementValue, type Cell } from './world/placement';
 import { canSleepAt, monstersNear, SLEEP_FADE_S, SLEEP_S, WAKE_TIME } from './survival/sleep';
+import { fertilize, plantSeeds, till } from './world/farming';
 import type { Chunk } from './world/chunk';
 import type { World } from './world/world';
 
@@ -1213,10 +1214,33 @@ export class Game {
       }
       if (!hit || !held) return;
       if (held.id === I.BONE_MEAL) {
-        if (world.getId(hit.x, hit.y, hit.z) === B.SAPLING && this.session?.ticker.forceGrow(hit.x, hit.y, hit.z)) {
+        const on = world.getId(hit.x, hit.y, hit.z);
+        const grew =
+          on === B.SAPLING
+            ? this.session?.ticker.forceGrow(hit.x, hit.y, hit.z)
+            : on === B.WHEAT && fertilize(world, hit.x, hit.y, hit.z, Math.random);
+        if (grew) {
           surv.consumeHeld();
           this.chunks.rebuildAt(hit.x, hit.y, hit.z);
           this.updateTarget();
+        }
+        return;
+      }
+      // Hoes till grass and dirt; seeds go into farmland.
+      if (itemDef(held.id)?.tool?.kind === 'hoe') {
+        if (hit.ny !== -1 && till(world, hit.x, hit.y, hit.z)) {
+          if (surv.survival) wearTool(surv.inventory, surv.selected, 1);
+          this.hud.render(surv.inventory, surv.selected);
+          this.sound.place(B.FARMLAND, centre(hit));
+          this.edited(hit);
+        }
+        return;
+      }
+      if (held.id === I.WHEAT_SEEDS) {
+        if (plantSeeds(world, hit.x, hit.y, hit.z)) {
+          surv.consumeHeld();
+          this.sound.place(B.WHEAT, centre(hit));
+          this.edited({ x: hit.x, y: hit.y + 1, z: hit.z });
         }
         return;
       }

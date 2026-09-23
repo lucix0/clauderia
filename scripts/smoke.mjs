@@ -447,6 +447,72 @@ try {
   check(bed.asleep && bed.morning === 0 && bed.spawn?.z === bed.z, 'survival: sleeping in the bed skips to morning and sets the respawn point', JSON.stringify(bed));
   await inf.evaluate(() => window.__game.nextFrame());
   await inf.screenshot({ path: `${OUT}/survival-bed.png` });
+  // Farming: till with a hoe, sow seeds, bone meal them ripe, harvest.
+  const farm = await inf.evaluate(async () => {
+    const g = window.__game;
+    const w = g.currentWorld;
+    const b = g.player.body;
+    const x0 = Math.floor(b.x) - 6;
+    const z0 = Math.floor(b.z) - 3;
+    const y = 99;
+    // A 5×5 grass bed with a water source in the middle, beside the bed platform.
+    for (let dx = -2; dx <= 2; dx++) for (let dz = -2; dz <= 2; dz++) w.setBlock(x0 + dx, y, z0 + dz, 2);
+    w.setBlock(x0, y, z0, 8);
+    // Stand two blocks south of (tx, tz) and look at height `at` above the grass.
+    const aim = async (tx, tz, at) => {
+      g.player.teleport(tx + 0.5, y + 1.2, tz + 2.5);
+      g.player.body.flying = true;
+      g.player.yaw = 0;
+      g.player.pitch = -Math.atan2(1.2 + 1.62 - at, 2);
+      await g.nextFrame();
+      await g.nextFrame();
+    };
+    const kept = g.survivor.inventory.slice(0, 3);
+    g.survivor.inventory[0] = { id: 300, count: 1, damage: 0 }; // wooden hoe
+    g.survivor.inventory[1] = { id: 276, count: 8, damage: 0 }; // seeds
+    g.survivor.inventory[2] = { id: 268, count: 8, damage: 0 }; // bone meal
+    const tx = x0 + 1;
+    const tz = z0;
+    await aim(tx, tz, 0.5);
+    g.select(0);
+    g.act(2);
+    const tilled = w.get(tx, y, tz);
+    g.select(1);
+    g.act(2);
+    const planted = w.getId(tx, y + 1, tz);
+    // Bone meal until ripe (aim at the crop itself).
+    await aim(tx, tz, 1.4);
+    g.select(2);
+    for (let i = 0; i < 4; i++) {
+      await g.nextFrame();
+      g.act(2);
+    }
+    const ripe = w.get(tx, y + 1, tz) >> 8;
+    // Dress the rest of the field in every growth stage for the picture.
+    let stage = 0;
+    for (let dx = -2; dx <= 2; dx++) {
+      for (let dz = -2; dz <= 2; dz++) {
+        if ((dx === 0 && dz === 0) || (dx === 1 && dz === 0)) continue;
+        w.setBlock(x0 + dx, y, z0 + dz, 69 | (1 << 8));
+        w.setBlock(x0 + dx, y + 1, z0 + dz, 70 | ((stage++ % 8) << 8));
+      }
+    }
+    await g.nextFrame();
+    g.act(0); // harvest the ripe one
+    await new Promise((r) => setTimeout(r, 300));
+    const harvested = g.items.list.filter((it) => it.stack.id === 277).length;
+    g.survivor.inventory.splice(0, 3, ...kept);
+    g.player.body.flying = false;
+    g.setViewpoint({ x: x0 + 0.5, y: y + 4, z: z0 + 5.5, yaw: 0, pitch: -0.6 });
+    return { tilled, planted, ripe, harvested };
+  });
+  check(
+    farm.tilled === (69 | (1 << 8)) && farm.planted === 70 && farm.ripe === 7 && farm.harvested > 0,
+    'survival: a hoe tills moist farmland, seeds grow into wheat and ripe wheat is harvested',
+    JSON.stringify(farm),
+  );
+  await inf.evaluate(() => window.__game.nextFrame());
+  await inf.screenshot({ path: `${OUT}/survival-farm.png` });
   const death = await inf.evaluate(async () => {
     const g = window.__game;
     const had = g.survivor.inventory.filter(Boolean).length;

@@ -27,10 +27,14 @@ export const I = {
   FLINT: 273,
   ARROW: 274,
   BOW: 275,
+  WHEAT_SEEDS: 276,
+  WHEAT: 277,
+  BREAD: 278,
 } as const;
 
-export type ToolKind = 'pickaxe' | 'axe' | 'shovel' | 'sword';
-export const TOOL_KINDS: readonly ToolKind[] = ['pickaxe', 'axe', 'shovel', 'sword'];
+export type ToolKind = 'pickaxe' | 'axe' | 'shovel' | 'sword' | 'hoe';
+/** Appended only: a tool's id is TOOL_FIRST + kind index × tiers + tier. */
+export const TOOL_KINDS: readonly ToolKind[] = ['pickaxe', 'axe', 'shovel', 'sword', 'hoe'];
 
 export interface Tier {
   readonly key: string;
@@ -147,11 +151,15 @@ add({ id: I.LAVA_BUCKET, name: 'Lava Bucket', maxStack: 1, fuel: 20000 });
 add({ id: I.FLINT, name: 'Flint' });
 add({ id: I.ARROW, name: 'Arrow' });
 add({ id: I.BOW, name: 'Bow', maxStack: 1, durability: 384, fuel: 300 });
+add({ id: I.WHEAT_SEEDS, name: 'Wheat Seeds' });
+add({ id: I.WHEAT, name: 'Wheat' });
+add({ id: I.BREAD, name: 'Bread', food: { hunger: 5, saturation: 6 } });
 
-const BASE_ATTACK: Record<ToolKind, number> = { pickaxe: 2, axe: 3, shovel: 1.5, sword: 4 };
+const BASE_ATTACK: Record<ToolKind, number> = { pickaxe: 2, axe: 3, shovel: 1.5, sword: 4, hoe: 1 };
+const KIND_NAMES: Record<ToolKind, string> = { pickaxe: 'Pickaxe', axe: 'Axe', shovel: 'Shovel', sword: 'Sword', hoe: 'Hoe' };
 TOOL_KINDS.forEach((kind) => {
   TIERS.forEach((tier, t) => {
-    const name = `${tier.name} ${kind === 'pickaxe' ? 'Pickaxe' : kind === 'axe' ? 'Axe' : kind === 'shovel' ? 'Shovel' : 'Sword'}`;
+    const name = `${tier.name} ${KIND_NAMES[kind]}`;
     add({
       id: toolId(kind, t),
       name,
@@ -190,6 +198,7 @@ export function itemByName(token: string): number | null {
   for (const d of defs.values()) if (d.key === want) return d.id;
   // A few friendly aliases.
   const alias: Record<string, number> = {
+    seeds: I.WHEAT_SEEDS,
     wood: B.LOG,
     log: B.LOG,
     oak_log: B.LOG,

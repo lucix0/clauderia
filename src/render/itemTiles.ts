@@ -82,6 +82,10 @@ function tool(s: Sprite, kind: ToolKind, tier: number): void {
       stickDiag(s, 9, 2, 14);
       s.draw(['..LXX', '.LXXD', 'LXXXD', 'XXXD.', '.DD..'], pal, 9, 1);
       break;
+    case 'hoe':
+      stickDiag(s, 10, 3, 14);
+      s.draw(['LLXXXXXD', '.DDDDXXD', '.....XD.'], pal, 6, 2);
+      break;
     case 'sword':
       stickDiag(s, 4, 2, 13);
       s.draw(['D..', '.D.', 'D.D'], { D: hex('#4a3620') }, 2, 10);
@@ -179,6 +183,34 @@ function paint(id: number, s: Sprite): void {
       s.draw(['XX', 'XX'], { X: hex('#4a3620') }, 10, 4);
       break;
     }
+    case I.WHEAT_SEEDS:
+      for (const [x, y] of [[5, 7], [8, 5], [10, 8], [7, 10], [4, 11], [11, 11], [9, 12], [6, 5]] as const) {
+        s.set(x, y, hex('#5f9a36'));
+        s.set(x, y + 1, hex('#3f6e22'));
+      }
+      break;
+    case I.WHEAT:
+      // Three diagonal stalks, each topped with a plump ear of grain.
+      for (let k = 0; k < 3; k++) {
+        const x0 = 1 + k * 3;
+        const y0 = 14;
+        for (let i = 0; i < 11; i++) {
+          const x = x0 + i;
+          const y = y0 - i - (k === 1 ? 1 : 0);
+          const ear = i >= 6;
+          s.set(x, y, hex(ear ? '#e6c65c' : '#b8963a'));
+          if (ear) s.set(x, y - 1, hex(i % 2 ? '#c9a543' : '#d8b650'));
+        }
+      }
+      break;
+    case I.BREAD:
+      s.draw(
+        ['...LLLLLL...', '.LLXXXXXXLL.', 'LXXDXXXDXXXL', 'XXXXDXXXDXXX', 'XXXXXXXXXXXD', '.DXXXXXXXXD.', '..DDDDDDDD..'],
+        { X: hex('#c98a3e'), L: hex('#e0a95a'), D: hex('#8a5424') },
+        2,
+        5,
+      );
+      break;
     default:
       if (id >= TOOL_FIRST && id < TOOL_FIRST + TOOL_KINDS.length * TIERS.length) {
         const k = id - TOOL_FIRST;

@@ -5,17 +5,20 @@
  *   and as finite, levelled fluids in Infinite worlds (see fluids.ts), with
  *   a cap on updates per tick so floods can't stall the game;
  * - sponges clear water within 2 blocks and keep it out;
- * - saplings grow into trees;
- * - grass spreads onto lit dirt and dies when covered.
+ * - saplings grow into trees, and crops through their stages;
+ * - farmland stays moist near water and turns back to dirt when covered;
+ * - grass spreads onto lit dirt and dies when covered;
+ * - leaves cut off from their tree decay.
  *
  * Pure: works on a World through setBlock and its change listener.
  */
 import { Rng } from '../util/prng';
-import { B, BLOCKS_LIGHT, IS_LIQUID, IS_SOLID } from './blocks';
+import { B, BLOCKS_LIGHT, IS_LIQUID, IS_SOLID, WHEAT_RIPE } from './blocks';
 import { updateFluid } from './fluids';
 import type { Chunk } from './chunk';
 import { posFromKey, posKey } from './coords';
 import { growTree, type TreeTarget } from './trees';
+import { growCrop, updateFarmland } from './farming';
 import type { World } from './world';
 
 export const TICKS_PER_SECOND = 20;
@@ -29,6 +32,8 @@ export const SPONGE_RADIUS = 2;
 export const RANDOM_TICK_RADIUS = 8;
 /** Leaves further than this (through leaves) from any log decay. */
 export const LEAF_REACH = 4;
+/** Ticks between a crop's growth chances: CROP_DELAY to 3 × CROP_DELAY. */
+export const CROP_DELAY = 300;
 /** Leaves state bit: placed by a player, never decays. */
 export const LEAF_PERSISTENT = 1;
 
@@ -232,6 +237,10 @@ export class Ticker {
       this.schedule(x, y - 1, z, 60 + this.rng.int(140));
     }
     if (newId === B.SAPLING) this.schedule(x, y, z, 100 + this.rng.int(300));
+    if (newId === B.WHEAT && oldId !== B.WHEAT) this.schedule(x, y, z, CROP_DELAY + this.rng.int(CROP_DELAY * 2));
+    // New farmland checks for water soon; farmland under a new solid block turns to dirt.
+    if (newId === B.FARMLAND && oldId !== B.FARMLAND) this.schedule(x, y, z, 5);
+    if (IS_SOLID[newId] && y > 0 && w.getId(x, y - 1, z) === B.FARMLAND) this.schedule(x, y - 1, z, 1);
     // A log or leaf gone: leaves around it may have lost their tree.
     if ((isLog(oldId) || isLeaf(oldId)) && oldId !== newId) this.scheduleLeaves(x, y, z);
   }
@@ -328,6 +337,13 @@ export class Ticker {
         break;
       case B.SAPLING:
         if (!this.growSapling(x, y, z)) this.schedule(x, y, z, 200 + this.rng.int(400));
+        break;
+      case B.WHEAT:
+        growCrop(w, x, y, z, () => this.rng.next());
+        if (w.get(x, y, z) >> 8 < WHEAT_RIPE) this.schedule(x, y, z, CROP_DELAY + this.rng.int(CROP_DELAY * 2));
+        break;
+      case B.FARMLAND:
+        updateFarmland(w, x, y, z, () => this.rng.next(), false);
         break;
       case B.LEAVES:
       case B.SPRUCE_LEAVES:
@@ -447,7 +463,10 @@ export class Ticker {
       if (!w.inColumnBounds(x, z)) continue;
       const top = w.getId(x, y, z);
       if (top === B.GRASS) this.spreadGrass(x, y, z);
-      if (w.getId(x, y + 1, z) === B.SAPLING && this.rng.chance(0.1)) this.growSapling(x, y + 1, z);
+      if (top === B.FARMLAND) updateFarmland(w, x, y, z, () => this.rng.next(), true);
+      const above = w.getId(x, y + 1, z);
+      if (above === B.SAPLING && this.rng.chance(0.1)) this.growSapling(x, y + 1, z);
+      if (above === B.WHEAT && this.rng.chance(0.1)) growCrop(w, x, y + 1, z, () => this.rng.next());
     }
   }
 

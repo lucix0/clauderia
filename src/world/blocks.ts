@@ -87,10 +87,15 @@ export const T = {
   BED_SIDE: 100,
   BED_HEAD_END: 101,
   BED_FOOT_END: 102,
+  /** Eight wheat growth stages. */
+  WHEAT_FIRST: 103,
+  FARMLAND_DRY: 111,
+  FARMLAND_WET: 112,
 } as const;
 
 export const CRACK_STAGES = 10;
-export const TILE_COUNT = T.BED_FOOT_END + 1;
+export const WHEAT_STAGES = 8;
+export const TILE_COUNT = T.FARMLAND_WET + 1;
 export const ATLAS_TILES_PER_ROW = 16;
 
 /** Block ids. Stored as bytes in the world array. */
@@ -149,9 +154,11 @@ export const B = {
   FURNACE: 66,
   CHEST: 67,
   BED: 68,
+  FARMLAND: 69,
+  WHEAT: 70,
 } as const;
 
-export const BLOCK_COUNT = 69;
+export const BLOCK_COUNT = 71;
 
 /**
  * Light-only id for a lit furnace (emits light; never stored in the world).
@@ -410,6 +417,10 @@ const specs: Record<number, BlockSpec> = {
     shape: 'slab',
     facing: true,
   },
+  // State bit 0: moist (water within 4 blocks).
+  [B.FARMLAND]: { name: 'Farmland', tiles: column(T.DIRT, T.FARMLAND_DRY, T.DIRT) },
+  // State: growth stage 0–7.
+  [B.WHEAT]: { name: 'Wheat Crops', tiles: T.WHEAT_FIRST, shape: 'cross', plant: true },
 };
 for (let i = 0; i < 16; i++) {
   specs[B.WOOL_FIRST + i] = { name: `${WOOL_NAMES[i]} Wool`, tiles: T.WOOL_FIRST + i };
@@ -542,6 +553,18 @@ export function frontTile(id: number, state: number): number {
   return FACE_TILES[id * 6 + 4]!;
 }
 
+/** Farmland state bit: moist. */
+export const FARMLAND_WET = 1;
+/** Last wheat growth stage (ripe). */
+export const WHEAT_RIPE = WHEAT_STAGES - 1;
+
+/** Tile for blocks whose look depends on their state (crop stages, moist farmland). */
+export function stateTile(id: number, state: number, tile: number): number {
+  if (id === B.WHEAT) return T.WHEAT_FIRST + Math.min(state, WHEAT_RIPE);
+  if (id === B.FARMLAND && tile === T.FARMLAND_DRY && state & FARMLAND_WET) return T.FARMLAND_WET;
+  return tile;
+}
+
 /** Bed state bit: this cell is the head (pillow) half. */
 export const BED_HEAD = 4;
 
@@ -587,6 +610,7 @@ function isLeafId(id: number): boolean {
  */
 export function restsOn(value: number, below: number): boolean {
   const id = value & ID_MASK;
+  if (id === B.WHEAT) return below === B.FARMLAND;
   if (IS_PLANT[id] || (id === B.TORCH && value >> 8 === 0)) return supportsPlant(below);
   if (id === B.SNOW_LAYER) return supportsPlant(below) || isLeafId(below);
   if (id === B.CACTUS) return below === B.SAND || below === B.CACTUS;

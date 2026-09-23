@@ -10,6 +10,7 @@ import {
   DEFAULT_WATER_TINT,
   T,
   TILE_COUNT,
+  WHEAT_STAGES,
 } from '../world/blocks';
 
 export const TILE_PX = 16;
@@ -628,6 +629,47 @@ function bed(t: Tile, rng: Rng, part: 'headTop' | 'footTop' | 'side' | 'headEnd'
   }
 }
 
+/** Wheat at growth stage `stage` (0–7): green shoots that grow tall and ripen gold. */
+function wheat(t: Tile, rng: Rng, stage: number): void {
+  t.clear();
+  const ripe = stage / 7;
+  const height = 3 + Math.round(stage * 1.6);
+  // Stalk colour fades from fresh green to straw as the crop ripens.
+  const stalk = (v: number): RGB => {
+    const g: RGB = [70, 150, 50];
+    const y: RGB = [196, 170, 72];
+    return scale([g[0] + (y[0] - g[0]) * ripe, g[1] + (y[1] - g[1]) * ripe, g[2] + (y[2] - g[2]) * ripe], v);
+  };
+  for (let k = 0; k < 7; k++) {
+    let x = 1 + k * 2 + (rng.chance(0.5) ? 1 : 0);
+    const h = Math.min(15, height + rng.int(3) - 1);
+    const v = 0.8 + rng.next() * 0.3;
+    for (let i = 0; i < h; i++) {
+      t.set(x, 15 - i, stalk(v));
+      if (i > 4 && rng.chance(0.15)) x += rng.chance(0.5) ? 1 : -1;
+    }
+    // Ears of grain at the top once the plant is half grown.
+    if (stage >= 4) {
+      const ear = stage === 7 ? hex('#d9b64c') : scale(stalk(1), 1.1);
+      const top = 16 - h;
+      for (let i = 0; i < Math.min(4, stage - 2); i++) {
+        t.set(x, top + i, ear);
+        if (i % 2 === 0) t.set(x + 1, top + i, scale(ear, 0.85));
+      }
+    }
+  }
+}
+
+/** Tilled soil: furrows running across the tile, darker when moist. */
+function farmland(t: Tile, rng: Rng, wet: boolean): void {
+  const base = wet ? ['#4a3220', '#51372a', '#46301f', '#573c28'] : ['#7a5638', '#835d3d', '#735134', '#8a6443'];
+  dithered(t, rng, base.map(hex), 8, 0.4);
+  for (let y = 0; y < 16; y++) {
+    if (y % 4 !== 3) continue;
+    for (let x = 0; x < 16; x++) t.set(x, y, scale(hex(base[0]!), 0.7 + rng.next() * 0.1));
+  }
+}
+
 /** Crack overlay stage `n` (0–9): dark lines on transparent. */
 function crack(t: Tile, n: number): void {
   t.clear();
@@ -1104,9 +1146,12 @@ export function paintTile(id: number): Uint8ClampedArray<ArrayBuffer> {
     case T.BED_SIDE: bed(t, rng, 'side'); break;
     case T.BED_HEAD_END: bed(t, rng, 'headEnd'); break;
     case T.BED_FOOT_END: bed(t, rng, 'footEnd'); break;
+    case T.FARMLAND_DRY: farmland(t, rng, false); break;
+    case T.FARMLAND_WET: farmland(t, rng, true); break;
     default:
       if (id >= T.WOOL_FIRST && id < T.WOOL_FIRST + 16) wool(t, rng, WOOL_COLORS[id - T.WOOL_FIRST]!);
       else if (id >= T.CRACK_FIRST && id < T.CRACK_FIRST + CRACK_STAGES) crack(t, id - T.CRACK_FIRST);
+      else if (id >= T.WHEAT_FIRST && id < T.WHEAT_FIRST + WHEAT_STAGES) wheat(t, rng, id - T.WHEAT_FIRST);
       else t.fill([255, 0, 255]);
   }
   return t.data;

@@ -4,7 +4,7 @@
  */
 import type { ItemStack } from '../items/inventory';
 import { I, itemDef, type ToolKind } from '../items/items';
-import { B, idOf, IS_LIQUID } from '../world/blocks';
+import { B, idOf, IS_LIQUID, WHEAT_RIPE } from '../world/blocks';
 
 interface Hardness {
   /** Seconds-ish scale (Minecraft-like); 0 breaks instantly, < 0 never. */
@@ -60,6 +60,7 @@ const TABLE = new Map<number, Hardness>([
   [B.CACTUS, H(0.4)],
   [B.TNT, H(0)],
   [B.BED, H(0.2)],
+  [B.FARMLAND, H(0.6, 'shovel')],
 ]);
 for (let i = 0; i < 16; i++) TABLE.set(B.WOOL_FIRST + i, H(0.8));
 
@@ -118,7 +119,6 @@ export function drops(value: number, held: ItemStack | null, rand: () => number)
     case B.AIR:
     case B.GLASS:
     case B.ICE:
-    case B.TALL_GRASS:
     case B.DEAD_BUSH:
     case B.SNOW_LAYER:
     case B.BEDROCK:
@@ -147,8 +147,20 @@ export function drops(value: number, held: ItemStack | null, rand: () => number)
     }
     case B.BOOKSHELF:
       return one(B.PLANKS, 3);
+    case B.TALL_GRASS:
+      return rand() < 0.125 ? one(I.WHEAT_SEEDS) : [];
     case B.GRAVEL:
       return rand() < 0.1 ? one(I.FLINT) : one(B.GRAVEL);
+    case B.FARMLAND:
+      return one(B.DIRT);
+    case B.WHEAT: {
+      // Ripe wheat gives grain and seeds to replant; anything younger just its seed back.
+      if ((value >> 8) < WHEAT_RIPE) return one(I.WHEAT_SEEDS);
+      return [
+        { id: I.WHEAT, count: 1, damage: 0 },
+        { id: I.WHEAT_SEEDS, count: 1 + Math.floor(rand() * 3), damage: 0 },
+      ];
+    }
     default:
       return one(id);
   }
