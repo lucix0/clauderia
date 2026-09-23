@@ -1,11 +1,11 @@
-import { DEFAULT_RENDER_DISTANCE, RENDER_DISTANCES } from '../config';
+import { DEFAULT_RENDER_DISTANCE, MAX_RENDER_DISTANCE, MIN_RENDER_DISTANCE } from '../config';
 
 export interface Settings {
   /** Multiplier on the base mouse speed. */
   sensitivity: number;
   /** Vertical field of view, degrees. */
   fov: number;
-  /** Index into RENDER_DISTANCES. */
+  /** Render distance in chunks (4–16). */
   renderDistance: number;
   invertY: boolean;
 }
@@ -17,7 +17,7 @@ export const DEFAULT_SETTINGS: Readonly<Settings> = {
   invertY: false,
 };
 
-const KEY = 'blocktide.settings.v1';
+const KEY = 'blocktide.settings.v2';
 
 function clampNumber(v: unknown, lo: number, hi: number, fallback: number): number {
   return typeof v === 'number' && Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : fallback;
@@ -30,7 +30,7 @@ export function sanitizeSettings(raw: unknown): Settings {
     sensitivity: clampNumber(r['sensitivity'], 0.1, 4, DEFAULT_SETTINGS.sensitivity),
     fov: Math.round(clampNumber(r['fov'], 40, 120, DEFAULT_SETTINGS.fov)),
     renderDistance: Math.round(
-      clampNumber(r['renderDistance'], 0, RENDER_DISTANCES.length - 1, DEFAULT_SETTINGS.renderDistance),
+      clampNumber(r['renderDistance'], MIN_RENDER_DISTANCE, MAX_RENDER_DISTANCE, DEFAULT_SETTINGS.renderDistance),
     ),
     invertY: typeof r['invertY'] === 'boolean' ? r['invertY'] : DEFAULT_SETTINGS.invertY,
   };

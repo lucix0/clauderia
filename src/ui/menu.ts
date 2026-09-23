@@ -1,4 +1,4 @@
-import { RENDER_DISTANCES } from '../config';
+import { MAX_RENDER_DISTANCE, MIN_RENDER_DISTANCE } from '../config';
 import { el, show } from './dom';
 import type { Settings } from './settings';
 
@@ -65,9 +65,9 @@ export class PauseMenu {
     this.fov = el('input', { attrs: { id: 'set-fov', type: 'range', min: '40', max: '120', step: '1' } });
     this.fovValue = el('span', { className: 'value' });
     this.distance = el('select', { className: 'field', attrs: { id: 'set-dist' } });
-    RENDER_DISTANCES.forEach((d, i) =>
-      this.distance.append(el('option', { text: `${d.name} (${d.blocks})`, attrs: { value: String(i) } })),
-    );
+    for (let d = MIN_RENDER_DISTANCE; d <= MAX_RENDER_DISTANCE; d++) {
+      this.distance.append(el('option', { text: `${d} chunks (${d * 16} blocks)`, attrs: { value: String(d) } }));
+    }
     this.invert = el('input', { attrs: { id: 'set-invert', type: 'checkbox' } });
     for (const input of [this.sens, this.fov, this.distance, this.invert]) {
       input.addEventListener('input', () => this.emitSettings());

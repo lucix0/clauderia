@@ -44,6 +44,7 @@ export class World {
   /** Number of block changes (stats). */
   changeCount = 0;
   private readonly listeners: BlockListener[] = [];
+  private loads = 0;
 
   constructor(opts: WorldOptions) {
     this.type = opts.type;
@@ -103,13 +104,12 @@ export class World {
     return this.chunks.get(chunkKey(toChunk(x), toChunk(z)));
   }
 
-  /** Add a generated (or loaded) chunk. */
+  /** Add a generated (or loaded) chunk. Meshing is up to the streamer. */
   addChunk(chunk: Chunk): void {
     this.chunks.set(chunk.key, chunk);
+    chunk.loadId = ++this.loads;
     chunk.updateNonEmpty();
     this.recomputeHeights(chunk);
-    chunk.markAllDirty();
-    this.dirtyChunks.add(chunk);
   }
 
   removeChunk(chunk: Chunk): void {
@@ -130,6 +130,12 @@ export class World {
 
   isLoaded(x: number, z: number): boolean {
     return this.chunkAt(x, z) !== undefined;
+  }
+
+  /** Loaded and lit: simulation may run here. */
+  isActive(x: number, z: number): boolean {
+    const c = this.chunkAt(x, z);
+    return c !== undefined && c.lit;
   }
 
   // ---- Blocks ----

@@ -8,7 +8,12 @@ import {
   RENDER_DISTANCES,
   STEP_DT,
   STEPS_PER_TICK,
+  UPLOAD_BUDGET_MS,
 } from './config';
+import { runCommand, type CommandContext, type Vec3 } from './commands/commands';
+import { Streamer } from './stream/streamer';
+import { CommandBar } from './ui/commandBar';
+import { WorkerPool } from './workers/pool';
 import { BUTTON_LEFT, BUTTON_MIDDLE, BUTTON_RIGHT, Input } from './player/input';
 import { bodyOverlapsCell, type CollisionWorld } from './player/physics';
 import { collisionWorld, Player } from './player/player';
@@ -34,7 +39,7 @@ import { BlockPicker } from './ui/picker';
 import { loadSettings, sanitizeSettings, saveSettings, type Settings } from './ui/settings';
 import { TitleScreen, type CreateWorldOptions } from './ui/title';
 import { randomSeed, seedFromString } from './util/prng';
-import { B, blockBounds, blockName, DEFAULT_HOTBAR, isValidBlock } from './world/blocks';
+import { B, blockBounds, blockName, DEFAULT_HOTBAR, IS_SOLID, isValidBlock } from './world/blocks';
 import { breakBlock, placeBlock, placementTarget, type Cell } from './world/placement';
 import type { World } from './world/world';
 
@@ -45,7 +50,7 @@ const MOUSE_SCALE = 0.0022;
  * - loading: generating or reading a world
  * - ready: world loaded, waiting for the click that captures the mouse
  */
-export type GameState = 'menu' | 'loading' | 'ready' | 'playing' | 'paused' | 'picker';
+export type GameState = 'menu' | 'loading' | 'ready' | 'playing' | 'paused' | 'picker' | 'command';
 
 export interface Viewpoint {
   x: number;
@@ -58,6 +63,8 @@ export interface Viewpoint {
 export interface BootOptions {
   /** ?debug: fixed seed, fixed camera, no overlay, no saving. */
   debug: boolean;
+  /** World type for ?debug. */
+  type: 'classic' | 'infinite';
   size: ClassicSizeName;
 }
 
@@ -76,6 +83,9 @@ export class Game {
   readonly menu: PauseMenu;
   readonly loading: LoadingScreen;
   readonly title: TitleScreen;
+  readonly commandBar: CommandBar;
+  readonly pool: WorkerPool;
+  streamer: Streamer | null = null;
   readonly debugOverlay: DebugOverlay;
   readonly icons: IconCache;
   readonly outline = new BlockOutline();
@@ -87,6 +97,8 @@ export class Game {
   debugMode = false;
   /** Called after a world finishes loading and the first frame is drawn. */
   onWorldReady: () => void = () => {};
+  /** Called when a world starts loading (or the game returns to the title screen). */
+  onWorldUnready: () => void = () => {};
   session: WorldSession | null = null;
   private world: World | null = null;
   private collision: CollisionWorld | null = null;
@@ -95,9 +107,13 @@ export class Game {
   private lastTime = 0;
   private readonly repeatAt = [0, 0, 0];
   private openPickerOnUnlock = false;
+  private openCommandOnUnlock = false;
   private readonly titleOverlay: HTMLElement;
   private frameResolvers: Array<() => void> = [];
+  private readonly tmpDir = new THREE.Vector3();
   private autosaveTimer = 0;
+  private pendingSpawn = false;
+  private placeOnSpawn = false;
   private busy = false;
   // Debug counters.
   private fpsFrames = 0;
@@ -163,9 +179,17 @@ export class Game {
         create: (opts) => void this.createWorld(opts),
         remove: (id) => void this.removeWorld(id),
       },
-      { types: ['classic'], modes: ['creative'], difficulties: ['normal'] },
+      { types: ['infinite', 'classic'], modes: ['creative'], difficulties: ['normal'] },
     );
     this.loading = new LoadingScreen(ui);
+    this.commandBar = new CommandBar(ui);
+    this.commandBar.onSubmit = (line) => {
+      const out = this.command(line);
+      if (out) this.commandBar.print(out, /^(Unknown|Bad|Missing|No |Usage|Nothing)/.test(out) || out.includes(' — /') ? 'error' : 'info');
+      this.resume();
+    };
+    this.commandBar.onClose = () => this.resume();
+    this.pool = new WorkerPool();
 
     canvas.addEventListener('click', () => {
       if (this.state === 'playing' && !this.input.locked) this.resume();
@@ -189,8 +213,9 @@ export class Game {
     this.resize();
   }
 
+  /** Render distance in blocks. */
   get renderDistance(): number {
-    return RENDER_DISTANCES[this.settings.renderDistance]!.blocks;
+    return this.settings.renderDistance * 16;
   }
 
   get currentWorld(): World | null {
@@ -204,7 +229,7 @@ export class Game {
     this.debugMode = opts.debug;
     this.start();
     if (opts.debug) {
-      await this.openSession(() => WorldSession.openDebug(opts.size, (st, f) => this.loading.set(st, f)));
+      await this.openSession(() => WorldSession.openDebug(opts.type, opts.size, (st, f) => this.loading.set(st, f)));
       return;
     }
     await this.migrateLegacySave();
@@ -234,7 +259,7 @@ export class Game {
   async createWorld(opts: CreateWorldOptions): Promise<void> {
     const seed = opts.seedText.trim() === '' ? randomSeed() : seedFromString(opts.seedText);
     const record = WorldSession.newRecord({ ...opts, seed });
-    await this.openSession(() => WorldSession.openClassic(record, true, (st, f) => this.loading.set(st, f)));
+    await this.openSession(() => WorldSession.open(record, true, (st, f) => this.loading.set(st, f)));
   }
 
   async playWorld(id: string): Promise<void> {
@@ -244,7 +269,7 @@ export class Game {
       return;
     }
     record.lastPlayed = Date.now();
-    await this.openSession(() => WorldSession.openClassic(record, true, (st, f) => this.loading.set(st, f)));
+    await this.openSession(() => WorldSession.open(record, true, (st, f) => this.loading.set(st, f)));
   }
 
   async removeWorld(id: string): Promise<void> {
@@ -301,6 +326,9 @@ export class Game {
   }
 
   private closeSession(): void {
+    this.onWorldUnready();
+    this.streamer?.dispose();
+    this.streamer = null;
     this.session?.dispose();
     this.session = null;
     this.world = null;
@@ -356,31 +384,69 @@ export class Game {
     this.outline.set(null);
     this.sky.setWorld(world);
     this.chunks.setWorld(world);
-    this.loading.set('Building terrain', 0.8);
-    await this.chunks.buildAll((done, total) => this.loading.set('Building terrain', 0.8 + (0.2 * done) / total));
+    const streamer = new Streamer(world, this.pool, this.chunks, {
+      loadRecord: (cx, cz) => session.loadRecord(cx, cz),
+      unloaded: (chunks) => session.chunksUnloaded(chunks),
+    });
+    streamer.radius = this.settings.renderDistance;
+    this.streamer = streamer;
+
     const spawn = session.spawn;
-    this.player.setSpawn(spawn.x, spawn.y, spawn.z);
+    this.player.setSpawn(spawn.x, Math.max(spawn.y, 0), spawn.z);
     const p = session.record.player;
     if (p) {
       this.player.setState(p);
       this.setHotbar(p.hotbar, p.selected);
     } else {
-      this.player.respawn();
+      this.player.teleport(spawn.x, spawn.y < 0 ? world.seaLevel + 24 : spawn.y, spawn.z);
       this.player.body.flying = false;
       this.player.yaw = 0;
       this.player.pitch = 0;
       this.setHotbar(DEFAULT_HOTBAR, 0);
+    }
+    this.pendingSpawn = session.spawnPending;
+    this.placeOnSpawn = !p;
+
+    // Wait for the terrain around the player to be meshed (and the spawn to resolve).
+    const b = this.player.body;
+    const pcx = Math.floor(b.x) >> 4;
+    const pcz = Math.floor(b.z) >> 4;
+    for (;;) {
+      await this.nextFrame();
+      if (this.session !== session) return;
+      const f = streamer.meshedFraction(pcx, pcz, 2);
+      this.loading.set('Building terrain', 0.8 + 0.2 * f);
+      if (f >= 1 && !this.pendingSpawn) break;
     }
     this.menu.setCanSave(session.persistent);
     this.menu.setStatus('');
     this.menu.setInfo(`${session.record.name} · seed ${world.seed}`);
   }
 
+  /** Once the spawn column is loaded, find the ground and (maybe) put the player there. */
+  private resolveSpawn(): void {
+    const session = this.session;
+    const world = this.world;
+    if (!session || !world) return;
+    const s = session.spawn;
+    if (this.pendingSpawn) {
+      if (!world.isActive(Math.floor(s.x), Math.floor(s.z))) return;
+      const y = groundHeight(world, Math.floor(s.x), Math.floor(s.z));
+      session.setSpawn(s.x, y, s.z);
+      this.player.setSpawn(s.x, y, s.z);
+      this.pendingSpawn = false;
+    }
+    if (this.placeOnSpawn && world.isActive(Math.floor(s.x), Math.floor(s.z))) {
+      this.player.respawn();
+      this.placeOnSpawn = false;
+    }
+  }
+
   private async finishLoading(): Promise<void> {
     this.loading.close();
     this.autosaveTimer = 0;
     if (this.debugMode) {
-      this.setViewpoint(debugViewpoint(this.world!));
+      this.setViewpoint(debugViewpoint(this.world!, this.player.spawn));
       this.enterPlayUnlocked();
     } else {
       this.showReady();
@@ -439,6 +505,11 @@ export class Game {
     if (wasPlaying) void this.saveNow('autosave');
   }
 
+  private openCommand(): void {
+    this.state = 'command';
+    this.commandBar.open();
+  }
+
   private openPicker(): void {
     this.state = 'picker';
     this.picker.open();
@@ -454,6 +525,7 @@ export class Game {
       this.titleOverlay.classList.add('hidden');
       this.menu.close();
       this.picker.close();
+      this.commandBar.close();
       this.hud.setVisible(true);
       this.hud.render(this.hotbar, this.selected);
       return;
@@ -462,6 +534,11 @@ export class Game {
     if (this.openPickerOnUnlock) {
       this.openPickerOnUnlock = false;
       this.openPicker();
+      return;
+    }
+    if (this.openCommandOnUnlock) {
+      this.openCommandOnUnlock = false;
+      this.openCommand();
       return;
     }
     this.pause();
@@ -473,14 +550,16 @@ export class Game {
     this.settings = sanitizeSettings(s);
     this.camera.fov = this.settings.fov;
     this.camera.updateProjectionMatrix();
+    if (this.streamer) this.streamer.radius = this.settings.renderDistance;
     saveSettings(this.settings);
   }
 
   cycleRenderDistance(): void {
-    const next = (this.settings.renderDistance + 1) % RENDER_DISTANCES.length;
+    const i = RENDER_DISTANCES.indexOf(this.settings.renderDistance);
+    const next = RENDER_DISTANCES[(i + 1) % RENDER_DISTANCES.length]!;
     this.applySettings({ ...this.settings, renderDistance: next });
     this.menu.setSettings(this.settings);
-    this.hud.flash(`Render distance: ${RENDER_DISTANCES[next]!.name}`);
+    this.hud.flash(`Render distance: ${next} chunks`);
   }
 
   // ---- Hotbar ----
@@ -519,6 +598,7 @@ export class Game {
       if (code === 'Escape') this.title.back();
       return;
     }
+    if (this.state === 'command') return;
     if (this.state !== 'playing') return;
     if (code.startsWith('Digit')) {
       const n = Number(code.slice(5));
@@ -539,6 +619,14 @@ export class Game {
       case 'KeyF':
         this.cycleRenderDistance();
         break;
+      case 'Slash':
+        if (this.input.locked) {
+          this.openCommandOnUnlock = true;
+          this.input.exitLock();
+        } else {
+          this.openCommand();
+        }
+        break;
       case 'KeyB':
         if (this.input.locked) {
           this.openPickerOnUnlock = true;
@@ -558,6 +646,33 @@ export class Game {
     if (this.state !== 'playing') return;
     this.act(button);
     this.repeatAt[button] = performance.now() + ACTION_REPEAT_S * 1000;
+  }
+
+  // ---- Commands ----
+
+  /** Run a slash command (also `window.__game.command()`); returns its output. */
+  command(line: string): string {
+    if (!this.world) return 'No world loaded';
+    return runCommand(this.commandContext(), line);
+  }
+
+  private commandContext(): CommandContext {
+    const world = this.world!;
+    const player = this.player;
+    const ctx: CommandContext = {
+      seed: world.seed,
+      position: (): Vec3 => ({ x: player.body.x, y: player.body.y, z: player.body.z }),
+      teleport: (x, y, z) => {
+        player.teleport(x, y, z);
+        this.placeOnSpawn = false;
+      },
+      setBlock: (x, y, z, id) => {
+        const ok = world.setBlock(x, y, z, id);
+        if (ok) this.chunks.rebuildAt(x, y, z);
+        return ok;
+      },
+    };
+    return ctx;
   }
 
   // ---- Block interaction ----
@@ -672,6 +787,13 @@ export class Game {
     this.camera.far = distance + 256;
     this.camera.updateProjectionMatrix();
     this.sky.update(dt, this.camera, this.cameraMedium(), distance);
+    this.resolveSpawn();
+    if (this.streamer) {
+      const dir = this.camera.getWorldDirection(this.tmpDir);
+      this.streamer.setView(this.camera.position.x, this.camera.position.z, dir.x, dir.z);
+      this.streamer.update();
+      this.streamer.upload(UPLOAD_BUDGET_MS);
+    }
     this.chunks.update(this.camera.position, REMESH_BUDGET_MS);
     this.chunks.updateVisibility(this.camera.position, distance);
     this.renderer.render(this.scene, this.camera);
@@ -685,7 +807,16 @@ export class Game {
   private step(dt: number): void {
     const i = this.input;
     const collision = this.collision;
-    if (!collision) return;
+    const world = this.world;
+    if (!collision || !world) return;
+    // Wait (frozen) until the ground under the player has loaded.
+    const b = this.player.body;
+    if (this.placeOnSpawn || !world.isActive(Math.floor(b.x), Math.floor(b.z))) {
+      this.player.prevX = b.x;
+      this.player.prevY = b.y;
+      this.player.prevZ = b.z;
+      return;
+    }
     this.player.step(
       collision,
       {
@@ -699,7 +830,10 @@ export class Game {
     if (this.player.body.y < -32) this.player.respawn();
     // Block behaviours tick at 20 Hz on the same fixed clock.
     this.stepCount++;
-    if (this.session && this.stepCount % STEPS_PER_TICK === 0) this.session.ticker.step();
+    if (this.session && this.stepCount % STEPS_PER_TICK === 0) {
+      this.session.ticker.setFocus(b.x, b.z);
+      this.session.ticker.step();
+    }
   }
 
   private cameraMedium(): Medium {
@@ -748,10 +882,15 @@ export class Game {
       world: w
         ? `${w.type}${w.bounds ? ` ${w.bounds.sx}×${w.bounds.sz}` : ''} seed ${w.seed} · ${w.chunks.size} chunks`
         : '—',
-      mode: `${b.flying ? 'flying' : b.liquid === 1 ? 'swimming' : b.liquid === 2 ? 'in lava' : 'walking'}${b.onGround ? ', on ground' : ''} · view ${RENDER_DISTANCES[this.settings.renderDistance]!.name}`,
+      mode: `${b.flying ? 'flying' : b.liquid === 1 ? 'swimming' : b.liquid === 2 ? 'in lava' : 'walking'}${b.onGround ? ', on ground' : ''} · view ${this.settings.renderDistance} chunks`,
       tick: this.session
         ? `#${this.session.ticker.tick}  ${this.session.ticker.lastUpdates} updates/tick  ${this.session.ticker.pending} queued`
         : '—',
+      chunk: `${Math.floor(b.x) >> 4}, ${Math.floor(b.z) >> 4}`,
+      streaming: this.streamer
+        ? `${w?.chunks.size ?? 0} loaded, ${this.chunks.columnCount} meshed · workers ${this.pool.running}/${this.pool.size} busy, ${this.pool.queued} queued · mesh ${this.streamer.lastMeshMs.toFixed(1)} ms`
+        : '—',
+      extra: [],
     });
   }
 
@@ -764,14 +903,28 @@ export class Game {
   }
 }
 
-/** Fixed camera for the ?debug screenshot: looking across the map centre. */
-export function debugViewpoint(world: World): Viewpoint {
-  const cx = world.bounds ? world.bounds.sx * 0.5 : 0;
-  const cz = world.bounds ? world.bounds.sz * 0.5 : 0;
+/**
+ * Fixed camera for the ?debug screenshot: looking across the map centre
+ * (Classic) or toward the spawn (Infinite).
+ */
+export function debugViewpoint(world: World, spawn: { x: number; z: number }): Viewpoint {
+  const cx = world.bounds ? world.bounds.sx * 0.5 : spawn.x;
+  const cz = world.bounds ? world.bounds.sz * 0.5 : spawn.z;
   const x = cx - 40;
   const z = cz + 44;
   const y = world.seaLevel + 22;
   const tx = cx + 8;
   const tz = cz - 16;
   return { x, y, z, yaw: Math.atan2(-(tx - x), -(tz - z)), pitch: -0.32 };
+}
+
+/** Feet height for standing on the highest solid ground of a column. */
+export function groundHeight(world: World, x: number, z: number): number {
+  for (let y = world.height - 2; y > 0; y--) {
+    const id = world.getId(x, y, z);
+    if (IS_SOLID[id] && id !== B.LEAVES && world.getId(x, y + 1, z) === B.AIR && world.getId(x, y + 2, z) === B.AIR) {
+      return y + 1;
+    }
+  }
+  return world.seaLevel + 1;
 }

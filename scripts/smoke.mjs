@@ -88,12 +88,12 @@ async function openPage(url) {
 }
 
 try {
-  // ---- 1. Debug view ----
+  // ---- 1. Classic debug view ----
   const t0 = Date.now();
-  const page = await openPage(`${base}?debug`);
-  check(true, 'debug world generated, meshed and rendered', `${((Date.now() - t0) / 1000).toFixed(1)} s`);
+  const page = await openPage(`${base}?debug&type=classic`);
+  check(true, 'Classic debug world generated, meshed and rendered', `${((Date.now() - t0) / 1000).toFixed(1)} s`);
   await page.waitForTimeout(500);
-  await page.screenshot({ path: `${OUT}/smoke-debug.png` });
+  await page.screenshot({ path: `${OUT}/smoke-classic.png` });
 
   const stats = await page.evaluate(() => {
     const g = window.__game;
@@ -165,7 +165,40 @@ try {
   await page.screenshot({ path: `${OUT}/smoke-picker.png` });
   await page.close();
 
-  // ---- 2. Title screen: create, edit, save & quit, reopen, delete ----
+  // ---- 2. Infinite debug world: streaming, fly-through, commands ----
+  const t1 = Date.now();
+  const inf = await openPage(`${base}?debug`);
+  check(true, 'Infinite debug world streamed in and rendered', `${((Date.now() - t1) / 1000).toFixed(1)} s`);
+  await inf.waitForTimeout(1500);
+  await inf.screenshot({ path: `${OUT}/smoke-infinite.png` });
+  const cmd = await inf.evaluate(() => window.__game.command('/seed'));
+  check(cmd === 'Seed: 1337', 'command API answers /seed', cmd);
+  const flight = await inf.evaluate(async () => {
+    const g = window.__game;
+    g.player.body.flying = true;
+    g.player.yaw = -Math.PI / 2;
+    g.input.keys.add('KeyW');
+    const x0 = g.player.body.x;
+    await new Promise((r) => setTimeout(r, 6000));
+    g.input.keys.delete('KeyW');
+    await new Promise((r) => setTimeout(r, 1500));
+    const b = g.player.body;
+    const cx = Math.floor(b.x) >> 4;
+    const cz = Math.floor(b.z) >> 4;
+    return { moved: b.x - x0, fraction: g.streamer.meshedFraction(cx, cz, 3), chunks: g.currentWorld.chunks.size };
+  });
+  check(flight.moved > 30 && flight.fraction === 1, 'terrain keeps up while flying', JSON.stringify(flight));
+  const far = await inf.evaluate(async () => {
+    const g = window.__game;
+    g.command('/tp -100000 100 -100000');
+    await new Promise((r) => setTimeout(r, 4000));
+    return { fraction: g.streamer.meshedFraction(-6250, -6250, 2), chunks: g.currentWorld.chunks.size };
+  });
+  check(far.fraction === 1, 'terrain streams in 100k blocks from the origin', JSON.stringify(far));
+  await inf.screenshot({ path: `${OUT}/smoke-far.png` });
+  await inf.close();
+
+  // ---- 3. Title screen: create, edit, save & quit, reopen, delete ----
   const game = await openTitle(`${base}?api`);
   await game.screenshot({ path: `${OUT}/smoke-title.png` });
   await game.click('text=Create new world');
@@ -201,7 +234,45 @@ try {
   await game.waitForTimeout(400);
   check((await game.locator('.world-row').count()) === 0, 'delete (with confirmation) removes the world');
 
-  // ---- 3. A v1 single-slot save is migrated into a Classic world ----
+  // ---- 4. Infinite world: edits survive unloading, quitting and reloading ----
+  await game.click('text=Create new world');
+  await game.fill('#cw-name', 'Endless');
+  await game.fill('#cw-seed', 'endless');
+  await game.selectOption('#cw-type', 'infinite');
+  await game.click('button:visible:has-text("Create")');
+  await game.waitForFunction(() => window.__ready === true, null, { timeout: 120_000 });
+  const spot = await game.evaluate(async () => {
+    const g = window.__game;
+    const until = async (cond, ms) => {
+      const end = performance.now() + ms;
+      while (!cond() && performance.now() < end) await new Promise((r) => setTimeout(r, 100));
+      return cond();
+    };
+    g.enterPlayUnlocked();
+    const s = g.player.spawn;
+    const x = Math.floor(s.x) - 5;
+    const z = Math.floor(s.z) + 7;
+    const placed = g.currentWorld.setBlock(x, 110, z, 47); // obsidian in the sky
+    g.command('/tp 3000 100 3000'); // far enough to unload the edit
+    const unloaded = await until(() => g.currentWorld.chunkAt(x, z) === undefined, 15000);
+    await new Promise((r) => setTimeout(r, 2000)); // let the unloaded chunk be written
+    g.command(`/tp ${x} 112 ${z}`);
+    const reloaded = await until(() => g.currentWorld.chunkAt(x, z) !== undefined, 15000);
+    const back = g.currentWorld.get(x, 110, z);
+    await g.quitToTitle();
+    return { x, z, placed, unloaded, reloaded, back };
+  });
+  check(spot.placed && spot.unloaded && spot.back === 47, 'edits survive unloading and reloading chunks', JSON.stringify(spot));
+  await game.reload();
+  await game.waitForSelector('.title-screen:not(.hidden)');
+  await game.click('.world-row:has-text("Endless") >> text=Play');
+  await game.waitForFunction(() => window.__ready === true, null, { timeout: 120_000 });
+  const kept2 = await game.evaluate(({ x, z }) => window.__game.currentWorld.get(x, 110, z), spot);
+  check(kept2 === 47, 'Infinite world edits survive a page reload', `block ${kept2}`);
+  await game.evaluate(() => window.__game.quitToTitle());
+  await game.waitForSelector('.title-screen:not(.hidden)');
+
+  // ---- 5. A v1 single-slot save is migrated into a Classic world ----
   await game.evaluate(async (bytes) => {
     const db = await new Promise((res) => {
       const q = indexedDB.open('blocktide');
@@ -216,7 +287,7 @@ try {
   }, legacySave());
   await game.reload();
   await game.waitForSelector('.title-screen:not(.hidden)', { timeout: 60_000 });
-  await game.click('.world-row >> text=Play');
+  await game.click('.world-row:has-text("My first world") >> text=Play');
   await game.waitForFunction(() => window.__ready === true, null, { timeout: 120_000 });
   const migrated = await game.evaluate(() => window.__game.currentWorld.get(30, 40, 20));
   check(migrated === 41, 'v1 save migrates into a playable Classic world', `marker ${migrated}`);

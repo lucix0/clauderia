@@ -23,6 +23,8 @@ export const WATER_DELAY = 5;
 export const LAVA_DELAY = 30;
 export const FALL_DELAY = 2;
 export const SPONGE_RADIUS = 2;
+/** Chunks (Chebyshev distance from the player) that receive random ticks. */
+export const RANDOM_TICK_RADIUS = 8;
 
 const NEIGHBOURS: ReadonlyArray<readonly [number, number, number]> = [
   [0, -1, 0],
@@ -47,6 +49,8 @@ export class Ticker {
     this.onChange(x, y, z, oldValue, newValue);
   private readonly trees: TreeTarget;
   private chunkList: Chunk[] = [];
+  private focusX = 0;
+  private focusZ = 0;
 
   constructor(private readonly world: World) {
     this.rng = new Rng(world.seed ^ 0x7ac3);
@@ -63,6 +67,12 @@ export class Ticker {
       get: (x, y, z) => world.getId(x, y, z),
       set: (x, y, z, id) => void world.setBlock(x, y, z, id),
     };
+  }
+
+  /** Where the player is: random ticks happen around here. */
+  setFocus(x: number, z: number): void {
+    this.focusX = Math.floor(x);
+    this.focusZ = Math.floor(z);
   }
 
   /** Stop listening to the world. */
@@ -212,6 +222,11 @@ export class Ticker {
     const w = this.world;
     const [x, y, z] = posFromKey(key);
     if (!w.inBounds(x, y, z)) return;
+    // Nothing simulates in chunks that aren't loaded and lit yet: wait.
+    if (!w.isActive(x, z)) {
+      this.scheduleIndex(key, 20);
+      return;
+    }
     const id = w.getId(x, y, z);
     switch (id) {
       case B.SAND:
@@ -316,14 +331,22 @@ export class Ticker {
    */
   private randomTicks(): void {
     const w = this.world;
-    if (this.tick % 20 === 1 || this.chunkList.length === 0) this.chunkList = [...w.chunks.values()];
+    if (this.tick % 20 === 1 || this.chunkList.length === 0) {
+      // Only chunks near the player take random ticks.
+      const fx = this.focusX >> 4;
+      const fz = this.focusZ >> 4;
+      this.chunkList = [];
+      for (const c of w.chunks.values()) {
+        if (Math.max(Math.abs(c.cx - fx), Math.abs(c.cz - fz)) <= RANDOM_TICK_RADIUS) this.chunkList.push(c);
+      }
+    }
     const list = this.chunkList;
     if (list.length === 0) return;
     // About one sample per 64 columns per tick.
-    const samples = list.length * 4;
+    const samples = Math.min(list.length * 4, 1024);
     for (let s = 0; s < samples; s++) {
       const chunk = list[this.rng.int(list.length)]!;
-      if (!w.chunks.has(chunk.key)) continue;
+      if (!chunk.lit || w.chunks.get(chunk.key) !== chunk) continue;
       const col = this.rng.int(256);
       const y = chunk.heights[col]!;
       if (y < 0) continue;

@@ -4,8 +4,8 @@ import type { Chunk } from '../world/chunk';
 import { CHUNK_HEIGHT, SECTIONS } from '../world/coords';
 import type { World } from '../world/world';
 import { meshSection, quadIndices, type ChunkMeshData, type PassMesh } from './mesher';
-import { worldNeighbourhood } from './neighbourhood';
-import { createPadded, fillPadded } from './padded';
+import { buildMeshInput, columnShadowLight, fillPaddedFromInput, type LightReader } from './meshInput';
+import { createPadded } from './padded';
 
 /** Render order per pass: translucent water is drawn after everything else. */
 const RENDER_ORDER = [0, 0, 2];
@@ -33,6 +33,8 @@ export class ChunkRenderer {
   private world: World | null = null;
   private readonly columns = new Map<number, Column>();
   private readonly padded = createPadded();
+  /** How cell light is read when building mesh inputs. */
+  lightReader: LightReader = columnShadowLight;
 
   constructor(private readonly materials: readonly THREE.Material[]) {
     this.group.name = 'chunks';
@@ -55,32 +57,17 @@ export class ChunkRenderer {
     return this.columns.size;
   }
 
-  /** Mesh every dirty section, yielding to the browser between batches. */
-  async buildAll(onProgress?: (done: number, total: number) => void): Promise<void> {
-    const world = this.world;
-    if (!world) return;
-    const chunks = [...world.dirtyChunks];
-    let done = 0;
-    let sliceStart = performance.now();
-    for (const chunk of chunks) {
-      this.rebuildChunk(chunk);
-      done++;
-      if (performance.now() - sliceStart > 30) {
-        onProgress?.(done, chunks.length);
-        await new Promise((resolve) => setTimeout(resolve, 0));
-        sliceStart = performance.now();
-      }
-    }
-    onProgress?.(chunks.length, chunks.length);
-  }
-
   /** Rebuild the chunk containing a cell right now (used after player edits). */
   rebuildAt(x: number, _y: number, z: number): void {
     const chunk = this.world?.chunkAt(x, z);
     if (chunk && chunk.dirtySections) this.rebuildChunk(chunk);
   }
 
-  /** Rebuild dirty sections nearest the camera first, until the budget is spent. */
+  /**
+   * Rebuild dirty sections of already-meshed columns, nearest the camera
+   * first, until the budget is spent. Columns that were never meshed are left
+   * to the worker pool.
+   */
   update(camera: THREE.Vector3, budgetMs: number): number {
     const world = this.world;
     if (!world || world.dirtyChunks.size === 0) return 0;
@@ -90,13 +77,33 @@ export class ChunkRenderer {
       const dz = (c.cz + 0.5) * 16 - camera.z;
       return dx * dx + dz * dz;
     };
-    const order = [...world.dirtyChunks].sort((a, b) => dist(a) - dist(b));
+    const order: Chunk[] = [];
+    for (const c of world.dirtyChunks) {
+      if (this.columns.has(c.key)) order.push(c);
+      else {
+        c.dirtySections = 0;
+        world.dirtyChunks.delete(c);
+      }
+    }
+    order.sort((a, b) => dist(a) - dist(b));
     let built = 0;
     for (const chunk of order) {
       built += this.rebuildChunk(chunk);
       if (performance.now() - start >= budgetMs) break;
     }
     return built;
+  }
+
+  hasColumn(chunk: Chunk): boolean {
+    return this.columns.has(chunk.key);
+  }
+
+  /** Install a full column mesh computed by a worker. */
+  applyColumn(chunk: Chunk, sections: ReadonlyArray<ChunkMeshData | null>): void {
+    const col = this.column(chunk);
+    for (let sy = 0; sy < SECTIONS; sy++) this.setSection(col, sy, sections[sy] ?? null);
+    this.rebuilds += SECTIONS;
+    this.flush(col);
   }
 
   /** Hide columns beyond the render distance (horizontal). */
@@ -113,22 +120,22 @@ export class ChunkRenderer {
     }
   }
 
-  /** Remesh all dirty sections of one chunk and refresh its merged meshes. */
+  /** Remesh all dirty sections of one chunk on the main thread (edits). */
   rebuildChunk(chunk: Chunk): number {
     const world = this.world;
     if (!world) return 0;
     const mask = chunk.dirtySections;
     chunk.dirtySections = 0;
     world.dirtyChunks.delete(chunk);
-    if (!mask) return 0;
-    const n = worldNeighbourhood(world, chunk);
+    if (!mask || !this.columns.has(chunk.key)) return 0;
+    const input = buildMeshInput(world, chunk, mask & chunk.nonEmpty, this.lightReader);
     const col = this.column(chunk);
     let built = 0;
     for (let sy = 0; sy < SECTIONS; sy++) {
       if (!(mask & (1 << sy))) continue;
       let data: ChunkMeshData | null = null;
-      if (hasContent(chunk, sy)) {
-        fillPadded(this.padded, n, sy);
+      if (chunk.nonEmpty & (1 << sy)) {
+        fillPaddedFromInput(this.padded, input, sy);
         data = meshSection(this.padded);
       }
       this.setSection(col, sy, data);
@@ -214,10 +221,6 @@ export class ChunkRenderer {
     }
     col.stalePasses = 0;
   }
-}
-
-function hasContent(chunk: Chunk, sy: number): boolean {
-  return (chunk.nonEmpty & (1 << sy)) !== 0;
 }
 
 function popcount(v: number): number {

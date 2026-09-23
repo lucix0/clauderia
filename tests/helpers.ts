@@ -1,6 +1,6 @@
-import { createPadded, fillPadded } from '../src/render/padded';
+import { buildMeshInput, columnShadowLight, fillPaddedFromInput } from '../src/render/meshInput';
 import { meshSection, type ChunkMeshData } from '../src/render/mesher';
-import { worldNeighbourhood } from '../src/render/neighbourhood';
+import { createPadded } from '../src/render/padded';
 import { World } from '../src/world/world';
 
 /** A Classic world of the given size, filled by `fill(x, y, z)` (default air). */
@@ -22,6 +22,6 @@ export function meshAt(world: World, cx: number, sy: number, cz: number): ChunkM
   const chunk = world.getChunk(cx, cz);
   if (!chunk) throw new Error('No such chunk');
   const pad = createPadded();
-  fillPadded(pad, worldNeighbourhood(world, chunk), sy);
+  fillPaddedFromInput(pad, buildMeshInput(world, chunk, 1 << sy, columnShadowLight), sy);
   return meshSection(pad);
 }

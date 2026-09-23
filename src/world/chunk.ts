@@ -22,6 +22,10 @@ export class Chunk {
   dirtySections = 0;
   /** Bitmask of sections containing at least one non-air block. */
   nonEmpty = 0;
+  /** Light is computed: safe to mesh against and to simulate in. */
+  lit = true;
+  /** Unique per addChunk call (a reloaded chunk gets a new one). */
+  loadId = 0;
 
   constructor(
     readonly cx: number,

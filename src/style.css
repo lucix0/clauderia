@@ -539,3 +539,59 @@ kbd {
   margin: 4px 0 16px;
   color: var(--ui-text);
 }
+
+/* ---- Command bar ---- */
+
+.command-area {
+  position: absolute;
+  left: 12px;
+  bottom: 96px;
+  width: min(640px, calc(100vw - 24px));
+  pointer-events: none;
+}
+
+.command-log {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 6px;
+}
+
+.command-line {
+  align-self: flex-start;
+  max-width: 100%;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.5);
+  font: 13px/1.5 var(--ui-mono);
+  color: #fff;
+  text-shadow: 1px 1px 0 #000;
+  transition: opacity 1.5s;
+}
+
+.command-line.error {
+  color: #ffb4ab;
+}
+
+.command-line.fade {
+  opacity: 0;
+}
+
+.command-area.typing .command-line.fade {
+  opacity: 1;
+}
+
+.command-bar {
+  pointer-events: auto;
+}
+
+.command-input {
+  width: 100%;
+  padding: 7px 10px;
+  border: 1px solid var(--ui-border);
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.72);
+  color: #fff;
+  font: 14px var(--ui-mono);
+  outline: none;
+}

@@ -26,7 +26,11 @@ function main(): void {
   game.onWorldReady = () => {
     window.__ready = true;
   };
-  void game.boot({ debug, size: isWorldSizeName(sizeParam) ? sizeParam : 'normal' });
+  game.onWorldUnready = () => {
+    window.__ready = false;
+  };
+  const type = params.get('type') === 'classic' ? 'classic' : 'infinite';
+  void game.boot({ debug, type, size: isWorldSizeName(sizeParam) ? sizeParam : 'normal' });
 }
 
 main();

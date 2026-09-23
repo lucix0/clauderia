@@ -17,6 +17,9 @@ export interface DebugStats {
   world: string;
   mode: string;
   tick: string;
+  chunk: string;
+  streaming: string;
+  extra: string[];
 }
 
 const FACING = ['north (-Z)', 'west (-X)', 'south (+Z)', 'east (+X)'];
@@ -45,14 +48,16 @@ export class DebugOverlay {
     this.text.textContent = [
       `Blocktide  ${s.fps.toFixed(0)} fps  (${s.frameMs.toFixed(1)} ms)`,
       `XYZ: ${s.x.toFixed(2)} / ${s.y.toFixed(2)} / ${s.z.toFixed(2)}`,
-      `Block: ${Math.floor(s.x)} ${Math.floor(s.y)} ${Math.floor(s.z)}   Facing: ${facing}`,
+      `Block: ${Math.floor(s.x)} ${Math.floor(s.y)} ${Math.floor(s.z)}   Chunk: ${s.chunk}   Facing: ${facing}`,
       `Yaw/Pitch: ${((turn * 180) / Math.PI).toFixed(1)}° / ${((s.pitch * 180) / Math.PI).toFixed(1)}°`,
       `Target: ${s.target}`,
-      `Chunk rebuilds: ${s.rebuildsPerSec}/s  total ${s.rebuildsTotal}  pending ${s.pendingChunks}`,
+      `Section rebuilds: ${s.rebuildsPerSec}/s  total ${s.rebuildsTotal}  pending ${s.pendingChunks}`,
+      `Streaming: ${s.streaming}`,
       `Draw calls: ${s.drawCalls}   Triangles: ${s.triangles.toLocaleString()}`,
       `Mode: ${s.mode}`,
       `Ticks: ${s.tick}`,
       `World: ${s.world}`,
+      ...s.extra,
     ].join('\n');
   }
 }
