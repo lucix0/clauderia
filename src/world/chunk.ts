@@ -33,6 +33,8 @@ export class Chunk {
   tints: Uint8Array | null = null;
   /** Biome id per column ((z << 4) | x), or null (Classic). */
   biomes: Uint8Array | null = null;
+  /** The stored record holds entities (so an empty record must replace it). */
+  storedExtras = false;
 
   constructor(
     readonly cx: number,

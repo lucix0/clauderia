@@ -13,8 +13,11 @@ import {
   DEFAULT_GRASS_TINT,
   DEFAULT_WATER_TINT,
   FACE_TILES,
+  FACING_FACES,
+  frontTile,
   FULL_BRIGHT,
   HAS_AXIS,
+  HAS_FACING,
   OCCLUDES,
   PASS,
   PASS_COUNT,
@@ -518,6 +521,7 @@ export function meshSection(pad: PaddedSection): ChunkMeshData {
         const top = shape === SHAPE_SLAB ? 0.5 : shape === SHAPE_LAYER ? 0.125 : 1;
         const axis = HAS_AXIS[id] ? (value >> 8) % 3 : 0;
         const snowy = id === B.GRASS && isSnow(blocks[i + PAD_LAYER]! & 0xff);
+        const front = HAS_FACING[id] ? FACING_FACES[(value >> 8) & 3]! : -1;
         for (let f = 0; f < 6; f++) {
           const ni = i + PAD_OFFSETS[f]!;
           const nb = blocks[ni]! & 0xff;
@@ -531,6 +535,8 @@ export function meshSection(pad: PaddedSection): ChunkMeshData {
             rotate = AXIS_ROTATE[axis * 6 + f] === 1;
           } else if (snowy && f !== 2 && f !== 3) {
             tile = T.GRASS_SIDE_SNOW;
+          } else if (front >= 0 && f !== 2 && f !== 3) {
+            tile = f === front ? frontTile(id, value >> 8) : FACE_TILES[id * 6]!;
           }
           emitFace(buf, f, x, y, z, tile, fullBright ? FULL_BYTE : FACE_BYTES[f]!, lightHere, top, rotate);
         }

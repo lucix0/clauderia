@@ -1,4 +1,4 @@
-import { B, BLOCKS_LIGHT, idOf, restsOn, supportsPlant, TORCH_ATTACH } from './blocks';
+import { B, BLOCKS_LIGHT, idOf, lightId, restsOn, supportsPlant, TORCH_ATTACH } from './blocks';
 import { borderSeeds, relight, spread, type LightStore } from './light';
 import { Chunk } from './chunk';
 import {
@@ -50,8 +50,8 @@ export class World {
   readonly lightStore: LightStore = {
     id: (x, y, z) => {
       const c = this.chunks.get(chunkKey(x >> 4, z >> 4));
-      if (!c) return this.inColumnBounds(x, z) ? 255 : this.getVirtual(x, y, z) & 0xff;
-      return c.blocks[(y << 8) | ((z & 15) << 4) | (x & 15)]! & 0xff;
+      if (!c) return this.inColumnBounds(x, z) ? 255 : lightId(this.getVirtual(x, y, z));
+      return lightId(c.blocks[(y << 8) | ((z & 15) << 4) | (x & 15)]!);
     },
     get: (x, y, z) => {
       const c = this.chunks.get(chunkKey(x >> 4, z >> 4));

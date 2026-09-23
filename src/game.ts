@@ -10,25 +10,33 @@ import {
   STEPS_PER_TICK,
   UPLOAD_BUDGET_MS,
 } from './config';
-import { runCommand, type CommandContext, type Vec3 } from './commands/commands';
+import { CommandError, runCommand, type CommandContext, type Vec3 } from './commands/commands';
 import { Streamer } from './stream/streamer';
 import { CommandBar } from './ui/commandBar';
 import { WorkerPool } from './workers/pool';
+import { ItemEntities, loadItems, saveItem } from './entities/items';
+import { ItemRenderer } from './entities/itemRender';
+import { Container } from './items/container';
+import { HOTBAR_SLOTS, type ItemStack } from './items/inventory';
+import { I, itemByName, itemDef, maxStack } from './items/items';
 import { BUTTON_LEFT, BUTTON_MIDDLE, BUTTON_RIGHT, Input } from './player/input';
 import { bodyOverlapsCell, type CollisionWorld } from './player/physics';
 import { collisionWorld, Player } from './player/player';
 import type { RayHit } from './player/raycast';
 import { createAtlas, type Atlas } from './render/atlas';
 import { ChunkRenderer } from './render/chunks';
-import { createMaterials, lightUniforms } from './render/materials';
+import { CrackOverlay } from './render/crack';
+import { createEntityMaterial, createMaterials, lightUniforms } from './render/materials';
 import { BlockOutline } from './render/outline';
 import { Sky, type Medium } from './render/sky';
 import { gunzip } from './save/compress';
 import { commitMigration, deleteWorld, getWorld, listWorlds, packChunks, readLegacySave } from './save/db';
 import { migrateV1 } from './save/migrate';
-import { newWorldId, type ClassicSizeName, type PlayerRecord } from './save/records';
+import { emptyExtras, newWorldId, type ChunkExtras, type ClassicSizeName, type PlayerRecord } from './save/records';
 import { deserializeSave } from './save/serialize';
 import { WorldSession } from './session';
+import { ContainerView, type ScreenKind } from './ui/containerView';
+import { DeathScreen } from './ui/death';
 import { DebugOverlay } from './ui/debug';
 import { el } from './ui/dom';
 import { Hud, HOTBAR_SIZE } from './ui/hud';
@@ -39,20 +47,29 @@ import { BlockPicker } from './ui/picker';
 import { loadSettings, sanitizeSettings, saveSettings, type Settings } from './ui/settings';
 import { TitleScreen, type CreateWorldOptions } from './ui/title';
 import { randomSeed, seedFromString } from './util/prng';
-import { B, blockBounds, blockName, DEFAULT_HOTBAR, IS_SOLID, isValidBlock } from './world/blocks';
+import { Survivor } from './survival/survivor';
+import { DEATH_MESSAGES, MAX_AIR } from './survival/vitals';
+import { B, blockBounds, blockName, DEFAULT_HOTBAR, facingToward, HAS_FACING, idOf, IS_SOLID } from './world/blocks';
 import { BIOME_KEYS, BIOMES } from './world/gen/biomes';
 import { infiniteGenerator } from './world/gen/infinite';
 import { breakBlock, placeBlock, placementTarget, placementValue, type Cell } from './world/placement';
+import type { Chunk } from './world/chunk';
 import type { World } from './world/world';
 
 const MOUSE_SCALE = 0.0022;
+/** Two W presses within this many ms start a sprint. */
+const SPRINT_TAP_MS = 300;
+const SPRINT_SPEED = 1.3;
+const SNEAK_SPEED = 0.3;
+/** Eyes drop this much while sneaking. */
+const SNEAK_DROP = 0.15;
 
 /**
  * - menu: title screen / world list
  * - loading: generating or reading a world
  * - ready: world loaded, waiting for the click that captures the mouse
  */
-export type GameState = 'menu' | 'loading' | 'ready' | 'playing' | 'paused' | 'picker' | 'command';
+export type GameState = 'menu' | 'loading' | 'ready' | 'playing' | 'paused' | 'picker' | 'command' | 'container' | 'dead';
 
 export interface Viewpoint {
   x: number;
@@ -92,8 +109,16 @@ export class Game {
   readonly icons: IconCache;
   readonly outline = new BlockOutline();
   settings: Settings = loadSettings();
-  hotbar: number[] = [...DEFAULT_HOTBAR];
-  selected = 0;
+  /** Game mode, inventory, vitals, mining. */
+  readonly survivor = new Survivor();
+  /** Dropped items. */
+  readonly items = new ItemEntities();
+  readonly itemRenderer: ItemRenderer;
+  readonly crack: CrackOverlay;
+  readonly containerView: ContainerView;
+  readonly deathScreen: DeathScreen;
+  /** The open container screen's contents (inventory / crafting table). */
+  container: Container | null = null;
   state: GameState = 'loading';
   target: RayHit | null = null;
   debugMode = false;
@@ -114,6 +139,11 @@ export class Game {
   private frameResolvers: Array<() => void> = [];
   private readonly tmpDir = new THREE.Vector3();
   private autosaveTimer = 0;
+  private lastForwardTap = -1e9;
+  private hurtShake = 0;
+  private sneakDrop = 0;
+  private fovKick = 0;
+  private openContainerOnUnlock: (() => void) | null = null;
   private pendingSpawn = false;
   private placeOnSpawn = false;
   private busy = false;
@@ -134,22 +164,49 @@ export class Game {
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
     this.camera.rotation.order = 'YXZ';
     this.atlas = createAtlas();
-    this.chunks = new ChunkRenderer(createMaterials(this.atlas.texture));
+    const materials = createMaterials(this.atlas.texture);
+    this.chunks = new ChunkRenderer(materials);
     this.scene.add(this.chunks.group);
     this.scene.add(this.outline.object);
+    this.itemRenderer = new ItemRenderer({
+      blocks: materials,
+      blockSprites: createEntityMaterial(this.atlas.texture, 'block-sprite'),
+      itemSprites: createEntityMaterial(this.atlas.itemTexture, 'item-sprite'),
+    });
+    this.scene.add(this.itemRenderer.group);
+    this.crack = new CrackOverlay(this.atlas.texture);
+    this.scene.add(this.crack.object);
     this.sky = new Sky(this.scene, this.atlas);
     this.input = new Input(canvas);
-    this.icons = new IconCache(this.atlas.canvas);
+    this.icons = new IconCache(this.atlas.canvas, this.atlas.itemCanvas);
 
     this.hud = new Hud(ui, this.icons);
     this.debugOverlay = new DebugOverlay(ui);
     this.picker = new BlockPicker(ui, this.icons);
     this.picker.onPick = (id) => {
-      this.hotbar[this.selected] = id;
-      this.hud.render(this.hotbar, this.selected, true);
+      this.survivor.giveCreative(id);
+      this.hud.render(this.survivor.inventory, this.survivor.selected, true);
       this.resume();
     };
     this.picker.onClose = () => this.resume();
+    this.containerView = new ContainerView(ui, this.icons, {
+      drop: (s) => this.throwStack(s),
+      close: () => this.closeContainer(),
+      changed: () => this.hud.render(this.survivor.inventory, this.survivor.selected),
+    });
+    this.deathScreen = new DeathScreen(ui, {
+      respawn: () => this.respawnAfterDeath(),
+      title: () => void this.quitToTitle(),
+    });
+    this.survivor.events = {
+      hurt: () => {
+        this.hud.hurt();
+        this.hurtShake = 1;
+      },
+      died: (cause) => this.onDeath(cause),
+      inventory: () => this.hud.render(this.survivor.inventory, this.survivor.selected),
+    };
+    this.items.onCollect = () => this.hud.render(this.survivor.inventory, this.survivor.selected);
 
     this.titleOverlay = el('div', { className: 'overlay click-to-play hidden' }, [
       el('div', { className: 'panel' }, [
@@ -159,8 +216,9 @@ export class Game {
         el('p', {
           className: 'hint',
           html:
-            '<kbd>WASD</kbd> move · <kbd>Space</kbd> jump · <kbd>Z</kbd> fly · <kbd>B</kbd> blocks · <kbd>Esc</kbd> menu<br>' +
-            'Left click break · right click place · middle click pick',
+            '<kbd>WASD</kbd> move (double-tap <kbd>W</kbd> sprint) · <kbd>Space</kbd> jump · <kbd>Shift</kbd> sneak · <kbd>E</kbd> inventory · <kbd>Esc</kbd> menu<br>' +
+            'Left click break · right click place / use · middle click pick · <kbd>Q</kbd> drop · <kbd>/</kbd> commands<br>' +
+            'Creative: <kbd>Z</kbd> fly · <kbd>B</kbd> all blocks · <kbd>R</kbd> respawn',
         }),
       ]),
     ]);
@@ -184,7 +242,7 @@ export class Game {
         create: (opts) => void this.createWorld(opts),
         remove: (id) => void this.removeWorld(id),
       },
-      { types: ['infinite', 'classic'], modes: ['creative'], difficulties: ['normal'] },
+      { types: ['infinite', 'classic'], modes: ['survival', 'creative'], difficulties: ['normal', 'peaceful'] },
     );
     this.loading = new LoadingScreen(ui);
     this.commandBar = new CommandBar(ui);
@@ -204,7 +262,7 @@ export class Game {
       onButtonDown: (button) => this.onButton(button),
       onWheel: (steps) => {
         if (this.state !== 'playing') return;
-        this.select((((this.selected + steps) % HOTBAR_SIZE) + HOTBAR_SIZE) % HOTBAR_SIZE);
+        this.select((((this.survivor.selected + steps) % HOTBAR_SIZE) + HOTBAR_SIZE) % HOTBAR_SIZE);
       },
       onLockChange: (locked) => this.onLockChange(locked),
     };
@@ -332,6 +390,10 @@ export class Game {
 
   private closeSession(): void {
     this.onWorldUnready();
+    this.containerView.close();
+    this.container = null;
+    this.deathScreen.close();
+    this.crack.set(null);
     this.streamer?.dispose();
     this.streamer = null;
     this.session?.dispose();
@@ -341,6 +403,15 @@ export class Game {
     this.target = null;
     this.outline.set(null);
     this.chunks.disposeAll();
+    this.items.clear();
+    this.itemRenderer.clear();
+  }
+
+  /** Entities to store with a chunk (and, when unloading, take out of the world). */
+  private chunkExtras(chunk: Chunk, remove: boolean): ChunkExtras {
+    const extras = emptyExtras();
+    extras.items = this.items.inChunk(chunk.cx, chunk.cz, remove).map(saveItem);
+    return extras;
   }
 
   async saveNow(reason: 'manual' | 'autosave'): Promise<boolean> {
@@ -365,7 +436,21 @@ export class Game {
 
   private playerRecord(): PlayerRecord {
     const s = this.player.getState();
-    return { ...s, hotbar: [...this.hotbar], selected: this.selected };
+    const surv = this.survivor.toJSON();
+    return { ...s, hotbar: this.hotbar, selected: this.survivor.selected, vitals: surv.vitals, inventory: surv.inventory };
+  }
+
+  /** Hotbar item ids (0 for empty slots). */
+  get hotbar(): number[] {
+    return this.survivor.inventory.slice(0, HOTBAR_SLOTS).map((s) => s?.id ?? 0);
+  }
+
+  get selected(): number {
+    return this.survivor.selected;
+  }
+
+  set selected(slot: number) {
+    this.select(slot);
   }
 
   private enterLoading(heading: string): void {
@@ -389,8 +474,15 @@ export class Game {
     this.outline.set(null);
     this.sky.setWorld(world);
     this.chunks.setWorld(world);
+    this.items.clear();
+    this.itemRenderer.clear();
+    session.extrasFor = (chunk, remove) => this.chunkExtras(chunk, remove);
+    for (const rec of session.initialRecords) loadItems(this.items, rec.extras.items);
     const streamer = new Streamer(world, this.pool, this.chunks, {
       loadRecord: (cx, cz) => session.loadRecord(cx, cz),
+      added: (_chunk, record) => {
+        if (record) loadItems(this.items, record.extras.items);
+      },
       unloaded: (chunks) => session.chunksUnloaded(chunks),
     });
     streamer.radius = this.settings.renderDistance;
@@ -399,16 +491,21 @@ export class Game {
     const spawn = session.spawn;
     this.player.setSpawn(spawn.x, Math.max(spawn.y, 0), spawn.z);
     const p = session.record.player;
+    this.survivor.mode = session.record.gameMode;
+    this.survivor.difficulty = session.record.difficulty;
+    this.survivor.respawn();
     if (p) {
       this.player.setState(p);
-      this.setHotbar(p.hotbar, p.selected);
+      this.survivor.load(p.vitals, p.inventory, p.hotbar, p.selected);
     } else {
       this.player.teleport(spawn.x, spawn.y < 0 ? world.seaLevel + 24 : spawn.y, spawn.z);
       this.player.body.flying = false;
       this.player.yaw = 0;
       this.player.pitch = 0;
-      this.setHotbar(DEFAULT_HOTBAR, 0);
+      // Creative starts with a hotbar of building blocks; survival with nothing.
+      this.survivor.load(undefined, undefined, this.survivor.survival ? [] : DEFAULT_HOTBAR, 0);
     }
+    if (this.survivor.survival) this.player.body.flying = false;
     this.pendingSpawn = session.spawnPending;
     this.placeOnSpawn = !p;
 
@@ -484,23 +581,28 @@ export class Game {
     this.titleOverlay.classList.add('hidden');
     this.menu.close();
     this.hud.setVisible(true);
-    this.hud.render(this.hotbar, this.selected);
+    this.hud.render(this.survivor.inventory, this.survivor.selected);
   }
 
   resume(): void {
-    if (this.state === 'loading' || this.state === 'menu' || !this.world) return;
+    if (this.state === 'loading' || this.state === 'menu' || this.state === 'dead' || !this.world) return;
     this.picker.close();
+    if (this.container) this.closeContainer(false);
     void this.input.requestLock().then((ok) => {
       if (!ok && !this.input.locked) {
+        if (this.state === 'dead' || this.state === 'menu' || this.state === 'loading') return;
         // The browser refused (e.g. too soon after Esc): ask for another click.
+        // The ?debug view carries on without the lock (automation).
         if (this.state === 'picker') this.picker.close();
-        this.showReady();
+        if (this.debugMode) this.enterPlayUnlocked();
+        else this.showReady();
       }
     });
   }
 
   pause(): void {
-    const wasPlaying = this.state === 'playing' || this.state === 'picker';
+    const wasPlaying = this.state === 'playing' || this.state === 'picker' || this.state === 'container';
+    if (this.container) this.closeContainer(false);
     this.state = 'paused';
     this.picker.close();
     this.titleOverlay.classList.add('hidden');
@@ -523,7 +625,8 @@ export class Game {
 
   private onLockChange(locked: boolean): void {
     if (locked) {
-      if (this.state === 'loading') {
+      // A lock granted late (after dying or leaving the world) is refused.
+      if (this.state === 'loading' || this.state === 'dead' || this.state === 'menu') {
         this.input.exitLock();
         return;
       }
@@ -532,11 +635,18 @@ export class Game {
       this.menu.close();
       this.picker.close();
       this.commandBar.close();
+      if (this.container) this.closeContainer(false);
       this.hud.setVisible(true);
-      this.hud.render(this.hotbar, this.selected);
+      this.hud.render(this.survivor.inventory, this.survivor.selected);
       return;
     }
     if (this.state !== 'playing') return;
+    if (this.openContainerOnUnlock) {
+      const open = this.openContainerOnUnlock;
+      this.openContainerOnUnlock = null;
+      open();
+      return;
+    }
     if (this.openPickerOnUnlock) {
       this.openPickerOnUnlock = false;
       this.openPicker();
@@ -571,17 +681,83 @@ export class Game {
   // ---- Hotbar ----
 
   select(slot: number): void {
-    this.selected = slot;
-    this.hud.render(this.hotbar, this.selected, true);
+    this.survivor.selected = Math.max(0, Math.min(HOTBAR_SIZE - 1, Math.floor(slot) || 0));
+    this.survivor.mining = null;
+    this.hud.render(this.survivor.inventory, this.survivor.selected, true);
   }
 
-  setHotbar(ids: readonly number[], selected: number): void {
-    this.hotbar = Array.from({ length: HOTBAR_SIZE }, (_, i) => {
-      const id = ids[i];
-      return id !== undefined && isValidBlock(id) && id !== B.AIR ? id : DEFAULT_HOTBAR[i]!;
-    });
-    this.selected = Math.max(0, Math.min(HOTBAR_SIZE - 1, Math.floor(selected) || 0));
-    this.hud.render(this.hotbar, this.selected);
+  // ---- Containers, dropping, death ----
+
+  /** Open a container screen (E inventory or a crafting table). */
+  openContainer(kind: ScreenKind, title: string, gridSize: 0 | 2 | 3): void {
+    const open = (): void => {
+      this.state = 'container';
+      this.container = new Container(this.survivor.inventory, gridSize);
+      this.containerView.open(this.container, kind, title);
+    };
+    if (this.input.locked) {
+      this.openContainerOnUnlock = open;
+      this.input.exitLock();
+    } else {
+      open();
+    }
+  }
+
+  /** Close the container screen; crafting leftovers go back or get dropped. */
+  closeContainer(relock = true): void {
+    const c = this.container;
+    if (!c) return;
+    for (const s of c.close()) this.throwStack(s);
+    this.container = null;
+    this.containerView.close();
+    this.hud.render(this.survivor.inventory, this.survivor.selected);
+    if (relock && this.state === 'container') {
+      this.state = 'playing';
+      this.resume();
+    }
+  }
+
+  /** Throw a stack forward from the player's eyes. */
+  throwStack(s: ItemStack): void {
+    const [dx, dy, dz] = this.player.viewDir();
+    const b = this.player.body;
+    this.items.spawn(s, b.x + dx * 0.3, b.y + PLAYER_EYE - 0.3, b.z + dz * 0.3, dx * 5, dy * 5 + 1.5, dz * 5, 2);
+  }
+
+  private onDeath(cause: keyof typeof DEATH_MESSAGES): void {
+    const b = this.player.body;
+    for (const s of this.survivor.takeAll()) {
+      const a = Math.random() * Math.PI * 2;
+      const r = Math.random() * 2.5;
+      this.items.spawn(s, b.x, b.y + 0.8, b.z, Math.cos(a) * r, 3 + Math.random() * 2, Math.sin(a) * r, 1.5);
+    }
+    if (this.container) this.closeContainer(false);
+    this.state = 'dead';
+    this.input.exitLock();
+    this.hud.setVisible(false);
+    this.deathScreen.open(DEATH_MESSAGES[cause]);
+    void this.saveNow('autosave');
+  }
+
+  private respawnAfterDeath(): void {
+    this.deathScreen.close();
+    this.survivor.respawn();
+    this.player.respawn();
+    this.player.body.flying = false;
+    this.state = 'playing';
+    this.hud.setVisible(true);
+    this.hud.render(this.survivor.inventory, this.survivor.selected);
+    this.resume();
+  }
+
+  /** Switch game mode (the /gamemode command). */
+  setGameMode(mode: 'creative' | 'survival'): void {
+    this.survivor.mode = mode;
+    if (this.session) this.session.record = { ...this.session.record, gameMode: mode };
+    if (mode === 'survival') this.player.body.flying = false;
+    this.survivor.mining = null;
+    this.crack.set(null);
+    this.hud.flash(mode === 'survival' ? 'Survival mode' : 'Creative mode');
   }
 
   // ---- Input ----
@@ -592,8 +768,13 @@ export class Game {
       return;
     }
     if (this.state === 'picker') {
-      if (code === 'KeyB') this.resume();
+      if (code === 'KeyB' || code === 'KeyE') this.resume();
       else if (code === 'Escape') this.pause();
+      return;
+    }
+    if (this.state === 'container') {
+      if (code === 'KeyE' || code === 'Escape') this.closeContainer();
+      else if (code === 'KeyQ') this.containerView.dropHovered(this.input.isDown('ControlLeft') || this.input.isDown('ControlRight'));
       return;
     }
     if (this.state === 'paused') {
@@ -604,15 +785,23 @@ export class Game {
       if (code === 'Escape') this.title.back();
       return;
     }
-    if (this.state === 'command') return;
+    if (this.state === 'command' || this.state === 'dead') return;
     if (this.state !== 'playing') return;
     if (code.startsWith('Digit')) {
       const n = Number(code.slice(5));
       if (n >= 1 && n <= HOTBAR_SIZE) this.select(n - 1);
       return;
     }
+    const surv = this.survivor;
     switch (code) {
+      case 'KeyW': {
+        const now = performance.now();
+        if (now - this.lastForwardTap < SPRINT_TAP_MS && !surv.sneaking) surv.sprinting = true;
+        this.lastForwardTap = now;
+        break;
+      }
       case 'KeyZ': {
+        if (surv.survival) break;
         const b = this.player.body;
         b.flying = !b.flying;
         b.vy = 0;
@@ -620,10 +809,20 @@ export class Game {
         break;
       }
       case 'KeyR':
-        this.player.respawn();
+        if (!surv.survival) this.player.respawn();
         break;
       case 'KeyF':
         this.cycleRenderDistance();
+        break;
+      case 'KeyQ': {
+        const all = this.input.isDown('ControlLeft') || this.input.isDown('ControlRight');
+        const s = surv.dropHeld(all);
+        if (s) this.throwStack(s);
+        break;
+      }
+      case 'KeyE':
+        if (surv.survival) this.openContainer('inventory', 'Inventory', 2);
+        else this.openPickerFromPlay();
         break;
       case 'Slash':
         if (this.input.locked) {
@@ -634,12 +833,8 @@ export class Game {
         }
         break;
       case 'KeyB':
-        if (this.input.locked) {
-          this.openPickerOnUnlock = true;
-          this.input.exitLock();
-        } else {
-          this.openPicker();
-        }
+        if (surv.survival) this.openContainer('inventory', 'Inventory', 2);
+        else this.openPickerFromPlay();
         break;
       case 'Escape':
         // Only reached when playing without pointer lock (debug view).
@@ -648,8 +843,19 @@ export class Game {
     }
   }
 
+  private openPickerFromPlay(): void {
+    if (this.input.locked) {
+      this.openPickerOnUnlock = true;
+      this.input.exitLock();
+    } else {
+      this.openPicker();
+    }
+  }
+
   private onButton(button: number): void {
     if (this.state !== 'playing') return;
+    // Survival mining is continuous (see frame()); everything else acts on press.
+    if (button === BUTTON_LEFT && this.survivor.survival) return;
     this.act(button);
     this.repeatAt[button] = performance.now() + ACTION_REPEAT_S * 1000;
   }
@@ -681,6 +887,38 @@ export class Game {
       setTime: (t) => {
         if (this.session) this.session.time = t;
       },
+      setGameMode: (mode) => this.setGameMode(mode),
+      setDifficulty: (d) => {
+        this.survivor.difficulty = d;
+        if (this.session) this.session.record = { ...this.session.record, difficulty: d };
+      },
+      give: (name, count) => {
+        const id = itemByName(name);
+        if (id === null || id === B.AIR) throw new CommandError(`Unknown item "${name}"`);
+        let left = count;
+        while (left > 0) {
+          const n = Math.min(left, maxStack(id));
+          const over = this.survivor.collect({ id, count: n, damage: 0 });
+          if (over > 0) {
+            // Inventory full: drop the rest at the player's feet.
+            const b = player.body;
+            this.items.spawn({ id, count: over, damage: 0 }, b.x, b.y + 0.5, b.z, 0, 2, 0, 1);
+          }
+          left -= n;
+        }
+        this.hud.render(this.survivor.inventory, this.survivor.selected);
+        return `Gave ${count} × ${itemDef(id)!.name}`;
+      },
+      kill: (target) => {
+        if (target !== '@s' && target !== 'me') throw new CommandError('Nothing like that to kill');
+        if (!this.survivor.survival) {
+          this.player.respawn();
+          return 'Creative players respawn instead';
+        }
+        this.survivor.vitals.hurt = 0;
+        this.survivor.damage(1000, 'command');
+        return 'Ouch';
+      },
     };
     if (world.type === 'infinite') {
       const gen = infiniteGenerator(world.seed);
@@ -703,21 +941,55 @@ export class Game {
   act(button: number): void {
     const world = this.world;
     const hit = this.target;
-    if (!world || !hit) return;
+    const surv = this.survivor;
+    if (!world || surv.dead) return;
     if (button === BUTTON_LEFT) {
-      if (breakBlock(world, hit.x, hit.y, hit.z)) this.edited(hit);
+      if (!hit) return;
+      if (surv.survival) {
+        if (surv.harvest(world, this.items, hit, world.get(hit.x, hit.y, hit.z))) this.edited(hit);
+      } else if (breakBlock(world, hit.x, hit.y, hit.z)) {
+        this.edited(hit);
+      }
     } else if (button === BUTTON_RIGHT) {
-      const id = this.hotbar[this.selected] ?? B.AIR;
+      if (hit && this.useBlock(hit)) return;
+      const held = surv.held;
+      if (!hit || !held) return;
+      if (held.id === I.BONE_MEAL) {
+        if (world.getId(hit.x, hit.y, hit.z) === B.SAPLING && this.session?.ticker.forceGrow(hit.x, hit.y, hit.z)) {
+          surv.consumeHeld();
+          this.chunks.rebuildAt(hit.x, hit.y, hit.z);
+          this.updateTarget();
+        }
+        return;
+      }
+      if (!itemDef(held.id)?.block) return;
+      const id = held.id;
       const normal = [hit.nx, hit.ny, hit.nz] as const;
-      const value = placementValue(id, normal);
+      let value = placementValue(id, normal);
       if (value === null) return;
+      if (HAS_FACING[id]) value = id | (facingToward(this.player.yaw) << 8);
       const cell = placementTarget(world, hit, normal, id);
       const changed = placeBlock(world, cell, value, (c, h) => bodyOverlapsCell(this.player.body, c.x, c.y, c.z, h));
-      if (changed) this.edited(changed);
+      if (changed) {
+        surv.consumeHeld();
+        this.edited(changed);
+      }
     } else if (button === BUTTON_MIDDLE) {
-      this.hotbar[this.selected] = hit.id;
-      this.hud.render(this.hotbar, this.selected, true);
+      if (!hit) return;
+      surv.pickBlock(idOf(world.get(hit.x, hit.y, hit.z)));
+      this.hud.render(surv.inventory, surv.selected, true);
     }
+  }
+
+  /** Right click on an interactive block (crafting table). Sneaking skips it. */
+  private useBlock(hit: RayHit): boolean {
+    if (this.survivor.sneaking) return false;
+    const id = this.world?.getId(hit.x, hit.y, hit.z);
+    if (id === B.CRAFTING_TABLE) {
+      this.openContainer('crafting', 'Crafting', 3);
+      return true;
+    }
+    return false;
   }
 
   /** Rebuild the edited chunk right away and refresh the target. */
@@ -768,15 +1040,17 @@ export class Game {
 
     const { dx, dy } = this.input.takeMouseDelta();
     const playing = this.state === 'playing';
+    // The world keeps running behind the inventory and death screens.
+    const running = playing || this.state === 'container' || this.state === 'dead';
     if (playing && this.input.locked) {
       const k = MOUSE_SCALE * this.settings.sensitivity;
       this.player.look(-dx * k, -dy * k * (this.settings.invertY ? -1 : 1));
     }
 
-    if (playing && this.collision) {
+    if (running && this.collision) {
       this.accumulator += dt;
       while (this.accumulator >= STEP_DT) {
-        this.step(STEP_DT);
+        this.step(STEP_DT, playing);
         this.accumulator -= STEP_DT;
       }
       if (!this.debugMode) {
@@ -787,26 +1061,46 @@ export class Game {
       this.accumulator = 0;
     }
 
+    const surv = this.survivor;
     const alpha = this.accumulator / STEP_DT;
     const pl = this.player;
     const b = pl.body;
+    // Camera effects: sneaking lowers the eyes, sprinting widens the view, hits shake it.
+    this.sneakDrop += ((surv.sneaking ? SNEAK_DROP : 0) - this.sneakDrop) * Math.min(1, dt * 12);
+    this.fovKick += ((surv.sprinting ? 1 : 0) - this.fovKick) * Math.min(1, dt * 8);
+    this.hurtShake = Math.max(0, this.hurtShake - dt * 3);
     this.camera.position.set(
       pl.prevX + (b.x - pl.prevX) * alpha,
-      pl.prevY + (b.y - pl.prevY) * alpha + PLAYER_EYE,
+      pl.prevY + (b.y - pl.prevY) * alpha + PLAYER_EYE - this.sneakDrop,
       pl.prevZ + (b.z - pl.prevZ) * alpha,
     );
-    this.camera.rotation.set(pl.pitch, pl.yaw, 0);
+    this.camera.rotation.set(pl.pitch, pl.yaw, Math.sin(this.hurtShake * 9) * this.hurtShake * 0.06);
+    const fov = this.settings.fov * (1 + this.fovKick * 0.1);
+    if (Math.abs(this.camera.fov - fov) > 0.01) this.camera.fov = fov;
 
     this.updateTarget();
-    if (playing && this.input.locked) {
+    const world = this.world;
+    if (playing && this.input.locked && world) {
       for (const button of [BUTTON_LEFT, BUTTON_MIDDLE, BUTTON_RIGHT]) {
         if (!this.input.isButtonHeld(button)) continue;
+        if (button === BUTTON_LEFT && surv.survival) continue;
+        if (button === BUTTON_RIGHT && surv.survival && surv.held && itemDef(surv.held.id)?.food) continue;
         if (now >= this.repeatAt[button]!) {
           this.act(button);
           this.repeatAt[button] = now + ACTION_REPEAT_S * 1000;
         }
       }
     }
+    if (world && surv.survival) {
+      const attacking = playing && this.input.locked && this.input.isButtonHeld(BUTTON_LEFT);
+      const broke = surv.updateMining(world, this.items, attacking ? this.target : null, attacking, dt);
+      if (broke) this.edited(broke);
+      const using = playing && this.input.locked && this.input.isButtonHeld(BUTTON_RIGHT);
+      if (surv.updateEating(using, dt)) this.hud.flash('Yum!');
+    } else {
+      surv.mining = null;
+    }
+    this.crack.set(surv.mining, surv.mining?.progress ?? 0);
 
     const distance = this.renderDistance;
     this.camera.far = distance + 256;
@@ -822,6 +1116,11 @@ export class Game {
     }
     this.chunks.update(this.camera.position, REMESH_BUDGET_MS);
     this.chunks.updateVisibility(this.camera.position, distance);
+    if (world) {
+      this.itemRenderer.update(this.items, alpha, now / 1000, pl.yaw, (x, y, z) => world.lightAt(x, y, z));
+      const eye = world.getVirtual(Math.floor(this.camera.position.x), Math.floor(this.camera.position.y), Math.floor(this.camera.position.z));
+      this.hud.setVitals(surv.survival && !surv.dead ? surv.vitals : null, (eye & 0xff) === B.WATER || surv.vitals.air < MAX_AIR);
+    }
     this.renderer.render(this.scene, this.camera);
 
     this.updateDebug(rawDt, performance.now() - frameStart);
@@ -830,7 +1129,7 @@ export class Game {
     for (const r of resolvers) r();
   }
 
-  private step(dt: number): void {
+  private step(dt: number, controlled: boolean): void {
     const i = this.input;
     const collision = this.collision;
     const world = this.world;
@@ -843,23 +1142,45 @@ export class Game {
       this.player.prevZ = b.z;
       return;
     }
+    const surv = this.survivor;
+    const alive = !surv.dead;
+    const key = (code: string): boolean => controlled && alive && i.isDown(code);
+    const forward = (key('KeyW') ? 1 : 0) - (key('KeyS') ? 1 : 0);
+    const shift = key('ShiftLeft') || key('ShiftRight');
+    surv.sneaking = shift && !b.flying;
+    surv.updateSprint(forward > 0, b);
+    const jump = key('Space');
+    const wasGrounded = b.onGround;
+    const px = b.x;
+    const py = b.y;
+    const pz = b.z;
     this.player.step(
       collision,
       {
-        forward: (i.isDown('KeyW') ? 1 : 0) - (i.isDown('KeyS') ? 1 : 0),
-        strafe: (i.isDown('KeyD') ? 1 : 0) - (i.isDown('KeyA') ? 1 : 0),
-        jump: i.isDown('Space'),
-        down: i.isDown('ShiftLeft') || i.isDown('ShiftRight'),
+        forward,
+        strafe: (key('KeyD') ? 1 : 0) - (key('KeyA') ? 1 : 0),
+        jump,
+        down: shift,
+        speed: surv.sprinting ? SPRINT_SPEED : surv.sneaking ? SNEAK_SPEED : 1,
+        sneak: surv.sneaking,
       },
       dt,
     );
-    if (this.player.body.y < -32) this.player.respawn();
-    // Block behaviours tick at 20 Hz on the same fixed clock.
+    surv.afterMove(b, px, py, pz, jump && wasGrounded && b.vy > 0);
+    if (b.y < -32 && !surv.survival) this.player.respawn();
+    const eyeY = b.y + PLAYER_EYE - this.sneakDrop;
+    this.items.update(
+      { ...collision, active: (x, z) => world.isActive(x, z) },
+      dt,
+      alive ? { x: b.x, y: b.y, z: b.z, collect: (s) => surv.collect(s) } : null,
+    );
+    // Block behaviours and vitals tick at 20 Hz on the same fixed clock.
     this.stepCount++;
     if (this.session && this.stepCount % STEPS_PER_TICK === 0) {
       this.session.tickTime();
       this.session.ticker.setFocus(b.x, b.z);
       this.session.ticker.step();
+      surv.tick(world, b, eyeY);
     }
   }
 

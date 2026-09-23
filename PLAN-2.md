@@ -140,3 +140,22 @@ milestone.
   replaced by placing a block into them.
 - `/locatebiome` returns the middle of the nearest patch (dry columns only
   for land biomes), with a y you can `/tp` to.
+- **M5 survival**: new worlds default to Survival (Creative and Peaceful are
+  options). Minecraft-like numbers: mining time = hardness × (1.5 if the tool
+  can harvest, else 5) / tool speed; tiers wood/gold 0, stone 1, iron 2,
+  diamond 3 (gold mines fastest but lasts 32 uses). Fall damage is
+  ceil(distance − 3); drowning 2 per second after 15 s of air; lava 4 per
+  half second plus 15 s of burning (water puts it out); cactus 1 on touch;
+  suffocation 1 per half second; half a second of invulnerability after a hit.
+  Starving stops at half a heart (Normal); Peaceful refills hunger and health.
+- Hunger: exhaustion from sprinting (0.1/block), jumping (0.05, 0.2 sprinting),
+  mining (0.005), damage (0.1) and healing; regen every 4 s at 18+ hunger,
+  every half second when full with saturation left.
+- E opens the inventory in Survival and the creative item grid in Creative
+  (B too). Survival mining is hold-to-break with a crack overlay; a quarter
+  second pause between blocks. Right click on a crafting table opens the 3×3
+  grid (sneak to place against it instead). Eating: hold right click 1.6 s.
+- Items drop from broken blocks, fly to the player within ~2.6 blocks, merge
+  when close and vanish after five minutes; they are saved with their chunk.
+- Only white wool is craftable (4 string); coloured wool, sponge and bedrock
+  are Creative-only. Bookshelves drop 3 planks.

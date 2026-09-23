@@ -1,5 +1,7 @@
 import * as THREE from 'three';
+import { ITEM_FIRST } from '../items/items';
 import { ATLAS_TILES_PER_ROW } from '../world/blocks';
+import { ITEM_ATLAS_COLUMNS, ITEM_ATLAS_SLOTS, paintItem } from './itemTiles';
 import { displayTile, paintAllTiles, TILE_PX } from './tiles';
 
 export interface Atlas {
@@ -9,6 +11,9 @@ export interface Atlas {
   readonly texture: THREE.Texture;
   /** A standalone repeating texture made from one tile (edge ocean, floor). */
   tileTexture(tile: number): THREE.Texture;
+  /** Item sprites (non-block items), for icons and dropped items. */
+  readonly itemCanvas: HTMLCanvasElement;
+  readonly itemTexture: THREE.Texture;
 }
 
 function pixelTexture<T extends THREE.Texture>(tex: T): T {
@@ -45,10 +50,13 @@ export function createAtlas(): Atlas {
     }
   });
   const texture = pixelTexture(new THREE.DataTexture(data, size, size, THREE.RGBAFormat, THREE.UnsignedByteType));
+  const items = createItemAtlas();
 
   return {
     canvas,
     texture,
+    itemCanvas: items.canvas,
+    itemTexture: items.texture,
     tileTexture(tile: number): THREE.Texture {
       const c = document.createElement('canvas');
       c.width = TILE_PX;
@@ -63,4 +71,20 @@ export function createAtlas(): Atlas {
       return tex;
     },
   };
+}
+
+/** Item sprites in a 16-column atlas (index = id − ITEM_FIRST). */
+function createItemAtlas(): { canvas: HTMLCanvasElement; texture: THREE.Texture } {
+  const rows = Math.ceil(ITEM_ATLAS_SLOTS / ITEM_ATLAS_COLUMNS);
+  const canvas = document.createElement('canvas');
+  canvas.width = ITEM_ATLAS_COLUMNS * TILE_PX;
+  canvas.height = rows * TILE_PX;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('2D canvas unavailable');
+  for (let i = 0; i < ITEM_ATLAS_SLOTS; i++) {
+    const rgba = paintItem(ITEM_FIRST + i);
+    ctx.putImageData(new ImageData(new Uint8ClampedArray(rgba), TILE_PX, TILE_PX), (i % ITEM_ATLAS_COLUMNS) * TILE_PX, Math.floor(i / ITEM_ATLAS_COLUMNS) * TILE_PX);
+  }
+  const texture = pixelTexture(new THREE.CanvasTexture(canvas));
+  return { canvas, texture };
 }

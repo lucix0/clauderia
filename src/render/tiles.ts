@@ -4,6 +4,7 @@
  */
 import { Rng } from '../util/prng';
 import {
+  CRACK_STAGES,
   DEFAULT_FOLIAGE_TINT,
   DEFAULT_GRASS_TINT,
   DEFAULT_WATER_TINT,
@@ -479,6 +480,122 @@ function clay(t: Tile, rng: Rng): void {
   for (let k = 0; k < 5; k++) t.set(rng.int(16), rng.int(16), hex('#8c929f'));
 }
 
+function craftingTop(t: Tile, rng: Rng): void {
+  planks(t, rng, ['#b08c58', '#a3824f', '#b8955e', '#ab8854']);
+  const line = hex('#5a4329');
+  for (let i = 0; i < 16; i++) {
+    t.set(i, 0, line);
+    t.set(i, 15, line);
+    t.set(0, i, line);
+    t.set(15, i, line);
+    // A 3×3 grid scored into the top.
+    t.set(5, i, scale(line, 1.2));
+    t.set(10, i, scale(line, 1.2));
+    t.set(i, 5, scale(line, 1.2));
+    t.set(i, 10, scale(line, 1.2));
+  }
+}
+
+function craftingSide(t: Tile, rng: Rng, front: boolean): void {
+  planks(t, rng);
+  const dark = hex('#4a3620');
+  for (let x = 0; x < 16; x++) {
+    t.set(x, 0, hex('#8a6a40'));
+    t.set(x, 1, hex('#b08c58'));
+    t.set(x, 2, dark);
+  }
+  if (front) {
+    // A saw and a hammer hanging on the front.
+    for (let i = 0; i < 7; i++) {
+      t.set(3 + i, 5 + (i >> 1), hex('#c8c8c8'));
+      t.set(3 + i, 6 + (i >> 1), hex('#9a9a9a'));
+    }
+    for (let y = 5; y < 13; y++) t.set(12, y, hex('#6d5334'));
+    t.set(11, 5, hex('#8d8d8d'));
+    t.set(12, 5, hex('#8d8d8d'));
+    t.set(13, 5, hex('#8d8d8d'));
+    t.set(11, 6, hex('#6d6d6d'));
+    t.set(13, 6, hex('#6d6d6d'));
+  } else {
+    // Hanging tools silhouette.
+    for (let y = 5; y < 12; y++) t.set(4, y, hex('#6d5334'));
+    for (let x = 2; x < 7; x++) t.set(x, 5, hex('#8d8d8d'));
+    for (let y = 6; y < 13; y++) t.set(11, y, hex('#6d5334'));
+    for (let y = 4; y < 7; y++) t.set(10, y, hex('#8d8d8d'));
+  }
+}
+
+function furnaceSide(t: Tile, rng: Rng, top: boolean): void {
+  cobble(t, rng, hex('#7a7a7a'));
+  if (top) {
+    for (let i = 0; i < 16; i++) {
+      t.set(i, 0, hex('#5a5a5a'));
+      t.set(0, i, hex('#5a5a5a'));
+      t.set(i, 15, hex('#4a4a4a'));
+      t.set(15, i, hex('#4a4a4a'));
+    }
+  }
+}
+
+function furnaceFront(t: Tile, rng: Rng, lit: boolean): void {
+  furnaceSide(t, rng, false);
+  // Mouth.
+  for (let y = 8; y < 14; y++) {
+    for (let x = 3; x < 13; x++) {
+      const edge = y === 8 || x === 3 || x === 12;
+      let c = edge ? hex('#3a3a3a') : hex('#161616');
+      if (lit && !edge) {
+        const heat = (y - 8) / 6 + rng.next() * 0.3;
+        c = heat > 0.9 ? hex('#ffd24a') : heat > 0.6 ? hex('#ff8a1c') : heat > 0.4 ? hex('#c8400e') : hex('#301008');
+      }
+      t.set(x, y, c);
+    }
+  }
+  // Vent slot above the mouth.
+  for (let x = 4; x < 12; x++) t.set(x, 4, lit ? hex('#6a2a10') : hex('#262626'));
+}
+
+function chest(t: Tile, rng: Rng, part: 'front' | 'side' | 'top'): void {
+  planks(t, rng, ['#9c6a2c', '#a47233', '#946427', '#ab7938'], '#5a3a14');
+  const rim = hex('#4a2e10');
+  for (let i = 0; i < 16; i++) {
+    t.set(i, 0, rim);
+    t.set(i, 15, rim);
+    t.set(0, i, rim);
+    t.set(15, i, rim);
+    if (part !== 'top') t.set(i, 5, rim);
+  }
+  if (part === 'front') {
+    for (let y = 4; y < 8; y++) for (let x = 7; x < 9; x++) t.set(x, y, hex('#c8c8c8'));
+    t.set(7, 7, hex('#8a8a8a'));
+    t.set(8, 7, hex('#8a8a8a'));
+  }
+}
+
+/** Crack overlay stage `n` (0–9): dark lines on transparent. */
+function crack(t: Tile, n: number): void {
+  t.clear();
+  const rng = new Rng(0xc4ac + 1);
+  // The same branching lines every stage; later stages draw more of them.
+  const segments: Array<[number, number]> = [];
+  for (let k = 0; k < 6; k++) {
+    let x = 8 + rng.int(3) - 1;
+    let y = 8 + rng.int(3) - 1;
+    const dx = rng.int(3) - 1;
+    const dy = rng.int(3) - 1 || 1;
+    for (let i = 0; i < 12; i++) {
+      segments.push([x, y]);
+      x += rng.chance(0.6) ? dx || (rng.chance(0.5) ? 1 : -1) : 0;
+      y += rng.chance(0.6) ? dy : 0;
+    }
+  }
+  const show = Math.round(((n + 1) / 10) * segments.length);
+  for (let i = 0; i < show; i++) {
+    const [x, y] = segments[i]!;
+    t.set(x, y, [20, 20, 20], 200);
+  }
+}
+
 function glass(t: Tile): void {
   t.clear();
   const frame = hex('#d6e8ee');
@@ -916,8 +1033,19 @@ export function paintTile(id: number): Uint8ClampedArray<ArrayBuffer> {
     case T.DIAMOND_ORE: ore(t, rng, [hex('#4fd8de'), hex('#b9fbff')], 4); break;
     case T.DIAMOND_BLOCK: metal(t, rng, hex('#6fe0dc'), hex('#2e9f9b'), 'top'); break;
     case T.GRASS_SIDE_SNOW: snowySide(t, rng); break;
+    case T.CRAFTING_TOP: craftingTop(t, rng); break;
+    case T.CRAFTING_SIDE: craftingSide(t, rng, false); break;
+    case T.CRAFTING_FRONT: craftingSide(t, rng, true); break;
+    case T.FURNACE_FRONT: furnaceFront(t, rng, false); break;
+    case T.FURNACE_FRONT_LIT: furnaceFront(t, rng, true); break;
+    case T.FURNACE_SIDE: furnaceSide(t, rng, false); break;
+    case T.FURNACE_TOP: furnaceSide(t, rng, true); break;
+    case T.CHEST_FRONT: chest(t, rng, 'front'); break;
+    case T.CHEST_SIDE: chest(t, rng, 'side'); break;
+    case T.CHEST_TOP: chest(t, rng, 'top'); break;
     default:
       if (id >= T.WOOL_FIRST && id < T.WOOL_FIRST + 16) wool(t, rng, WOOL_COLORS[id - T.WOOL_FIRST]!);
+      else if (id >= T.CRACK_FIRST && id < T.CRACK_FIRST + CRACK_STAGES) crack(t, id - T.CRACK_FIRST);
       else t.fill([255, 0, 255]);
   }
   return t.data;

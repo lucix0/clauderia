@@ -70,9 +70,22 @@ export const T = {
   DIAMOND_ORE: 75,
   DIAMOND_BLOCK: 76,
   GRASS_SIDE_SNOW: 77,
+  CRAFTING_TOP: 78,
+  CRAFTING_SIDE: 79,
+  CRAFTING_FRONT: 80,
+  FURNACE_FRONT: 81,
+  FURNACE_FRONT_LIT: 82,
+  FURNACE_SIDE: 83,
+  FURNACE_TOP: 84,
+  CHEST_FRONT: 85,
+  CHEST_SIDE: 86,
+  CHEST_TOP: 87,
+  /** Ten mining crack stages (transparent overlays). */
+  CRACK_FIRST: 88,
 } as const;
 
-export const TILE_COUNT = T.GRASS_SIDE_SNOW + 1;
+export const CRACK_STAGES = 10;
+export const TILE_COUNT = T.CRACK_FIRST + CRACK_STAGES;
 export const ATLAS_TILES_PER_ROW = 16;
 
 /** Block ids. Stored as bytes in the world array. */
@@ -127,9 +140,18 @@ export const B = {
   BIRCH_PLANKS: 62,
   DIAMOND_ORE: 63,
   DIAMOND_BLOCK: 64,
+  CRAFTING_TABLE: 65,
+  FURNACE: 66,
+  CHEST: 67,
 } as const;
 
-export const BLOCK_COUNT = 65;
+export const BLOCK_COUNT = 68;
+
+/**
+ * Light-only id for a lit furnace (emits light; never stored in the world).
+ * 255 is taken by "unloaded" in light regions.
+ */
+export const LIT_FURNACE_LIGHT_ID = 254;
 
 /**
  * Stored block values are 16-bit: the low byte is the block id, the high byte
@@ -214,6 +236,8 @@ export interface BlockDef {
   readonly replaceable: boolean;
   /** Logs: the block state holds an axis (0 Y, 1 X, 2 Z). */
   readonly axis: boolean;
+  /** Furnaces and chests: state bits 0–1 face the front toward the player. */
+  readonly facing: boolean;
 }
 
 interface BlockSpec {
@@ -233,6 +257,7 @@ interface BlockSpec {
   tint?: Tint;
   replaceable?: boolean;
   axis?: boolean;
+  facing?: boolean;
 }
 
 function all(t: number): FaceTiles {
@@ -357,6 +382,21 @@ const specs: Record<number, BlockSpec> = {
   [B.BIRCH_PLANKS]: { name: 'Birch Planks', tiles: T.BIRCH_PLANKS },
   [B.DIAMOND_ORE]: { name: 'Diamond Ore', tiles: T.DIAMOND_ORE },
   [B.DIAMOND_BLOCK]: { name: 'Diamond Block', tiles: T.DIAMOND_BLOCK },
+  [B.CRAFTING_TABLE]: {
+    name: 'Crafting Table',
+    tiles: [T.CRAFTING_SIDE, T.CRAFTING_SIDE, T.CRAFTING_TOP, T.PLANKS, T.CRAFTING_FRONT, T.CRAFTING_FRONT],
+  },
+  // Front tile on +Z: state 0 faces south, and icons show the front.
+  [B.FURNACE]: {
+    name: 'Furnace',
+    tiles: [T.FURNACE_SIDE, T.FURNACE_SIDE, T.FURNACE_TOP, T.FURNACE_TOP, T.FURNACE_FRONT, T.FURNACE_SIDE],
+    facing: true,
+  },
+  [B.CHEST]: {
+    name: 'Chest',
+    tiles: [T.CHEST_SIDE, T.CHEST_SIDE, T.CHEST_TOP, T.CHEST_TOP, T.CHEST_FRONT, T.CHEST_SIDE],
+    facing: true,
+  },
 };
 for (let i = 0; i < 16; i++) {
   specs[B.WOOL_FIRST + i] = { name: `${WOOL_NAMES[i]} Wool`, tiles: T.WOOL_FIRST + i };
@@ -384,6 +424,7 @@ function build(id: number, s: BlockSpec): BlockDef {
     tint: s.tint ?? 'none',
     replaceable: s.replaceable ?? false,
     axis: s.axis ?? false,
+    facing: s.facing ?? false,
   };
 }
 
@@ -432,6 +473,7 @@ export const TINT_MODE = new Uint8Array(256);
 export const TINT_COLOR = new Uint32Array(256);
 export const REPLACEABLE = new Uint8Array(256);
 export const HAS_AXIS = new Uint8Array(256);
+export const HAS_FACING = new Uint8Array(256);
 
 for (const def of BLOCKS) {
   const id = def.id;
@@ -455,6 +497,7 @@ for (const def of BLOCKS) {
   }
   REPLACEABLE[id] = def.replaceable ? 1 : 0;
   HAS_AXIS[id] = def.axis ? 1 : 0;
+  HAS_FACING[id] = def.facing ? 1 : 0;
   for (let f = 0; f < 6; f++) FACE_TILES[id * 6 + f] = def.tiles[f]!;
 }
 
@@ -470,6 +513,32 @@ export function isValidBlock(id: number): boolean {
 export function collisionHeight(id: number): number {
   if (!IS_SOLID[id]) return 0;
   return SHAPE[id] === SHAPE_SLAB ? 0.5 : 1;
+}
+
+LIGHT_EMIT[LIT_FURNACE_LIGHT_ID] = 13;
+LIGHT_OPACITY[LIT_FURNACE_LIGHT_ID] = 15;
+
+/** Facing state (0–3) → the face (+X 0, −X 1, +Z 4, −Z 5) the front is on. */
+export const FACING_FACES: readonly number[] = [4, 1, 5, 0];
+/** Furnace state bit: burning. */
+export const FURNACE_LIT = 4;
+
+/** Front-face tile for a facing block's state (lit furnaces glow). */
+export function frontTile(id: number, state: number): number {
+  if (id === B.FURNACE) return state & FURNACE_LIT ? T.FURNACE_FRONT_LIT : T.FURNACE_FRONT;
+  return FACE_TILES[id * 6 + 4]!;
+}
+
+/** Facing state that turns a block's front toward a player with view yaw `yaw`. */
+export function facingToward(yaw: number): number {
+  const k = ((Math.round(yaw / (Math.PI / 2)) % 4) + 4) % 4;
+  return (4 - k) % 4;
+}
+
+/** The id light code sees for a stored value (a burning furnace emits light). */
+export function lightId(value: number): number {
+  const id = value & ID_MASK;
+  return id === B.FURNACE && (value >> 8) & FURNACE_LIT ? LIT_FURNACE_LIGHT_ID : id;
 }
 
 /** Visual height of partial-height shapes (slab 0.5, snow layer 2/16), else 1. */

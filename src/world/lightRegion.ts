@@ -1,3 +1,4 @@
+import { lightId } from './blocks';
 import { CHUNK_HEIGHT } from './coords';
 import { REGION, REGION_LAYER, REGION_VOLUME } from './light';
 import type { World } from './world';
@@ -20,7 +21,7 @@ export function buildLightRegion(world: World, cx: number, cz: number): Uint8Arr
           for (let lz = 0; lz < 16; lz++) {
             let i = (y << 8) | (lz << 4);
             let o = (y * REGION + oz + lz) * REGION + ox;
-            for (let lx = 0; lx < 16; lx++, i++, o++) out[o] = b[i]! & 0xff;
+            for (let lx = 0; lx < 16; lx++, i++, o++) out[o] = lightId(b[i]!);
           }
         }
       } else {
@@ -29,7 +30,7 @@ export function buildLightRegion(world: World, cx: number, cz: number): Uint8Arr
             const wx = (cx + dx) * 16 + lx;
             const wz = (cz + dz) * 16 + lz;
             for (let y = 0, o = (oz + lz) * REGION + ox + lx; y < CHUNK_HEIGHT; y++, o += REGION_LAYER) {
-              out[o] = world.getVirtual(wx, y, wz) & 0xff;
+              out[o] = lightId(world.getVirtual(wx, y, wz));
             }
           }
         }

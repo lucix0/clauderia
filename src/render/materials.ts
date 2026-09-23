@@ -61,6 +61,17 @@ uniform float uDaylight;`,
   return material;
 }
 
+/**
+ * A double-sided cutout material with the same voxel lighting, for dropped
+ * item sprites and mob models (their geometry carries skyLight / blockLight /
+ * tint attributes like chunk meshes do).
+ */
+export function createEntityMaterial(texture: THREE.Texture, name: string): THREE.MeshBasicMaterial {
+  const m = new THREE.MeshBasicMaterial({ map: texture, vertexColors: true, alphaTest: 0.5, side: THREE.DoubleSide });
+  m.name = name;
+  return withVoxelLight(m);
+}
+
 /** Unlit materials with shader-side voxel lighting, indexed by render pass. */
 export function createMaterials(atlas: THREE.Texture): THREE.MeshBasicMaterial[] {
   const opaque = new THREE.MeshBasicMaterial({ map: atlas, vertexColors: true });

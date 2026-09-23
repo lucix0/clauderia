@@ -2,6 +2,8 @@
  * Small isometric block icons drawn from the atlas canvas with 2D transforms.
  * Cross-shaped blocks get a flat sprite instead.
  */
+import { ITEM_FIRST } from '../items/items';
+import { ITEM_ATLAS_COLUMNS } from '../render/itemTiles';
 import { ATLAS_TILES_PER_ROW, BLOCKS, SHAPE, SHAPE_CROSS, SHAPE_TORCH, shapeHeight } from '../world/blocks';
 
 const TILE = 16;
@@ -77,19 +79,35 @@ export function renderIcon(atlas: HTMLCanvasElement, id: number, size: number): 
   return canvas;
 }
 
-/** Cache of icon data URLs, keyed by block id. */
+/** A non-block item's sprite, scaled up with hard pixels. */
+export function renderItemIcon(items: HTMLCanvasElement, id: number, size: number): HTMLCanvasElement {
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return canvas;
+  ctx.imageSmoothingEnabled = false;
+  const i = id - ITEM_FIRST;
+  const pad = size * 0.06;
+  ctx.drawImage(items, (i % ITEM_ATLAS_COLUMNS) * TILE, Math.floor(i / ITEM_ATLAS_COLUMNS) * TILE, TILE, TILE, pad, pad, size - pad * 2, size - pad * 2);
+  return canvas;
+}
+
+/** Cache of icon data URLs, keyed by item id (blocks and items). */
 export class IconCache {
   private readonly urls = new Map<number, string>();
 
   constructor(
     private readonly atlas: HTMLCanvasElement,
+    private readonly items: HTMLCanvasElement | null = null,
     private readonly size = 48,
   ) {}
 
   url(id: number): string {
     let u = this.urls.get(id);
     if (!u) {
-      u = renderIcon(this.atlas, id, this.size).toDataURL();
+      const canvas = id >= ITEM_FIRST && this.items ? renderItemIcon(this.items, id, this.size) : renderIcon(this.atlas, id, this.size);
+      u = canvas.toDataURL();
       this.urls.set(id, u);
     }
     return u;

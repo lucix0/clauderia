@@ -257,6 +257,150 @@ try {
     check(res.ok && res.here.toLowerCase() === `biome: ${name}`, `/locatebiome ${key} finds it`, `${res.msg} → ${res.here}`);
     await inf.screenshot({ path: `${OUT}/biome-${key}.png` });
   }
+  // Survival: HUD, crafting through the inventory screen, mining, pickup, falling, death.
+  const surv = await inf.evaluate(async () => {
+    const g = window.__game;
+    const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+    g.command('/time set noon');
+    const s = g.player.spawn;
+    g.player.teleport(s.x, s.y, s.z);
+    g.player.yaw = 0;
+    g.player.pitch = -0.35;
+    // The spawn area may have unloaded during the biome tour: wait for it.
+    for (let i = 0; i < 150 && !(g.currentWorld.isActive(Math.floor(s.x), Math.floor(s.z)) && g.streamer.meshedFraction(Math.floor(s.x) >> 4, Math.floor(s.z) >> 4, 2) === 1); i++) {
+      await wait(200);
+    }
+    const out = { mode: g.command('/gamemode survival') };
+    g.survivor.inventory.fill(null);
+    g.command('/give oak_log 3');
+    g.command('/give cobblestone 3');
+    g.command('/give apple 4');
+    await wait(300);
+    // Logs → planks in the 2×2 grid, clicking like a player would.
+    g.openContainer('inventory', 'Inventory', 2);
+    const c = g.container;
+    const inv = g.survivor.inventory;
+    const at = (id) => {
+      const i = inv.findIndex((st) => st && st.id === id);
+      return i < 9 ? ['hotbar', i] : ['main', i - 9];
+    };
+    c.click(...at(15), 'left', false); // pick up the logs
+    c.click('grid', 0, 'left', false); // all three into the grid
+    c.click('result', 0, 'left', true); // shift: craft them all → 12 planks
+    out.planks = inv.filter((st) => st && st.id === 5).reduce((n, st) => n + st.count, 0);
+    // Leave a stick recipe in the grid for the screenshot.
+    for (const cell of [1, 3]) {
+      const [sec, i] = at(5);
+      c.click(sec, i, 'left', false);
+      c.click('grid', cell, 'right', false);
+      c.click(sec, i, 'left', false);
+    }
+    out.preview = c.result[0]?.id ?? null;
+    g.containerView.render();
+    return out;
+  });
+  check(surv.mode === 'Game mode set to survival' && surv.planks === 12 && surv.preview === 256, 'survival: logs craft into planks in the inventory grid', JSON.stringify(surv));
+  await inf.mouse.move(640, 250);
+  await inf.screenshot({ path: `${OUT}/survival-inventory.png` });
+  const surv2 = await inf.evaluate(async () => {
+    const g = window.__game;
+    const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+    g.closeContainer();
+    await wait(200);
+    const inv = () => g.survivor.inventory;
+    const count = (id) => inv().filter((st) => st && st.id === id).reduce((n, st) => n + st.count, 0);
+    // Sticks and a wooden pickaxe on a crafting table.
+    g.openContainer('crafting', 'Crafting', 3);
+    for (let i = 0; i < 50 && !g.container; i++) await wait(50); // waits for the pointer lock to let go
+    const table = g.container;
+    const put = (id, cell) => {
+      const i = inv().findIndex((st) => st && st.id === id);
+      const sec = i < 9 ? 'hotbar' : 'main';
+      const idx = i < 9 ? i : i - 9;
+      table.click(sec, idx, 'left', false); // pick up
+      table.click('grid', cell, 'right', false); // place one
+      table.click(sec, idx, 'left', false); // put the rest back
+    };
+    put(5, 1);
+    put(5, 4);
+    table.click('result', 0, 'left', true); // sticks
+    for (const cell of [0, 1, 2]) put(5, cell);
+    put(256, 4);
+    put(256, 7);
+    table.click('result', 0, 'left', true); // wooden pickaxe
+    g.closeContainer();
+    const pick = inv().findIndex((st) => st && st.id === 280);
+    const result = { sticks: count(256), pickaxe: pick >= 0 };
+    // Mine the stone under a dug hole with the pickaxe: drops cobblestone, which gets picked up.
+    if (pick >= 0) {
+      const tmp = inv()[0];
+      inv()[0] = inv()[pick];
+      inv()[pick] = tmp;
+      g.select(0);
+    }
+    const w = g.currentWorld;
+    const b = g.player.body;
+    const x = Math.floor(b.x);
+    const z = Math.floor(b.z) - 1;
+    let y = Math.floor(b.y) - 1;
+    w.setBlock(x, y, z, 1);
+    const cobbleBefore = count(4);
+    // Software GL can be slow: wait for simulation steps (60 per second), not wall time.
+    const waitSteps = async (n) => {
+      const start = g.stepCount;
+      for (let i = 0; i < 600 && g.stepCount - start < n; i++) await wait(50);
+    };
+    let broke = null;
+    for (let i = 0; i < 300 && !broke; i++) broke = g.survivor.updateMining(w, g.items, { x, y, z }, true, 1 / 60);
+    g.chunks.rebuildAt(x, y, z);
+    await waitSteps(120);
+    result.mined = !!broke && w.getId(x, y, z) === 0;
+    result.pickedUp = count(4) - cobbleBefore;
+    result.wear = inv()[0]?.damage ?? -1;
+    // A 10-block drop hurts.
+    w.setBlock(x, y, z, 1);
+    // Below 18 hunger nothing heals in the meantime.
+    g.survivor.vitals.hunger = 17;
+    g.survivor.vitals.saturation = 0;
+    g.player.teleport(b.x, b.y + 10, b.z);
+    const hp = g.survivor.vitals.health;
+    await waitSteps(150);
+    result.fall = hp - g.survivor.vitals.health;
+    g.survivor.vitals.hunger = 14;
+    g.survivor.vitals.air = 180;
+    return result;
+  });
+  check(surv2.sticks === 2 && surv2.pickaxe, 'survival: sticks and a wooden pickaxe on a 3×3 grid', JSON.stringify(surv2));
+  check(surv2.mined && surv2.pickedUp === 1 && surv2.wear === 1, 'survival: pickaxe mines stone, cobblestone is picked up', JSON.stringify(surv2));
+  check(surv2.fall >= 5 && surv2.fall <= 8, 'survival: falling ten blocks hurts', `${surv2.fall} damage`);
+  await inf.waitForTimeout(300);
+  await inf.screenshot({ path: `${OUT}/survival-hud.png` });
+  const death = await inf.evaluate(async () => {
+    const g = window.__game;
+    const had = g.survivor.inventory.filter(Boolean).length;
+    g.command('/kill');
+    await new Promise((r) => setTimeout(r, 600));
+    const dropped = g.items.list.length;
+    const state = g.state;
+    return { had, dropped, state };
+  });
+  check(death.state === 'dead' && death.dropped >= death.had, 'survival: dying drops the inventory and shows the death screen', JSON.stringify(death));
+  await inf.screenshot({ path: `${OUT}/survival-death.png` });
+  const back = await inf.evaluate(async () => {
+    const g = window.__game;
+    const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+    document.querySelector('.death-screen .btn-primary').click();
+    await wait(500);
+    const r = { health: g.survivor.vitals.health, state: g.state, mode: g.command('/gamemode creative') };
+    // Back to the unlocked debug view for the rest of the run.
+    g.input.exitLock();
+    await wait(300);
+    g.items.clear();
+    g.enterPlayUnlocked();
+    return r;
+  });
+  check(back.health === 20, 'survival: respawn restores health', JSON.stringify(back));
+
   await inf.evaluate(() => window.__game.setViewpoint({ x: window.__game.player.spawn.x, y: 90, z: window.__game.player.spawn.z, yaw: 0, pitch: -0.3 }));
   const flight = await inf.evaluate(async () => {
     const g = window.__game;

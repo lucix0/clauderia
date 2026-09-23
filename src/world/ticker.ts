@@ -289,6 +289,13 @@ export class Ticker {
     }
   }
 
+  /** Bone meal: grow a sapling into a tree right now (still needs soil and room). */
+  forceGrow(x: number, y: number, z: number): boolean {
+    const soil = this.world.getId(x, y - 1, z);
+    if (soil !== B.GRASS && soil !== B.DIRT) return false;
+    return growTree(this.trees, this.rng, x, y, z);
+  }
+
   private growSapling(x: number, y: number, z: number): boolean {
     const w = this.world;
     const soil = w.getId(x, y - 1, z);

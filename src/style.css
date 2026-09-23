@@ -595,3 +595,242 @@ kbd {
   font: 14px var(--ui-mono);
   outline: none;
 }
+
+/* ---- Stacks, vitals ---- */
+
+.slot-count {
+  position: absolute;
+  right: 4px;
+  bottom: 1px;
+  font: 700 14px var(--ui-font);
+  color: #fff;
+  text-shadow: 2px 2px 0 #222;
+  pointer-events: none;
+}
+
+.slot-bar {
+  position: absolute;
+  left: 7px;
+  right: 7px;
+  bottom: 5px;
+  height: 3px;
+  background: #111;
+  display: none;
+  pointer-events: none;
+}
+
+.slot-bar-fill {
+  display: block;
+  height: 100%;
+}
+
+.vitals {
+  position: absolute;
+  left: 50%;
+  bottom: 82px;
+  width: 500px;
+  height: 46px;
+  transform: translateX(-50%);
+}
+
+.vital-row {
+  position: absolute;
+  display: flex;
+  gap: 1px;
+}
+
+.vital-row img {
+  width: 21px;
+  height: 21px;
+  image-rendering: pixelated;
+}
+
+.vital-row.hearts {
+  left: 0;
+  bottom: 0;
+}
+
+.vital-row.food {
+  right: 0;
+  bottom: 0;
+}
+
+.vital-row.air {
+  right: 0;
+  bottom: 24px;
+}
+
+.vitals.low .hearts img {
+  animation: heart-shake 0.4s infinite;
+}
+
+@keyframes heart-shake {
+  50% {
+    transform: translateY(-2px);
+  }
+}
+
+.hurt-flash {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  background: radial-gradient(ellipse at center, rgba(200, 0, 0, 0) 40%, rgba(200, 0, 0, 0.55) 100%);
+}
+
+.hurt-flash.active {
+  animation: hurt-flash 0.45s ease-out;
+}
+
+@keyframes hurt-flash {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+.fire-overlay {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  background: linear-gradient(to top, rgba(255, 110, 20, 0.45), rgba(255, 110, 20, 0) 45%);
+  transition: opacity 0.3s;
+}
+
+.fire-overlay.visible {
+  opacity: 1;
+}
+
+/* ---- Container screens ---- */
+
+.container-panel {
+  width: auto;
+  user-select: none;
+}
+
+.container-top {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  min-height: 60px;
+  margin-bottom: 14px;
+}
+
+.slot-grid {
+  display: grid;
+  gap: 3px;
+}
+
+.container-body .slot-grid + .slot-grid {
+  margin-top: 10px;
+}
+
+.container-screen .slot {
+  cursor: pointer;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.container-screen .slot:hover {
+  border-color: var(--ui-accent);
+}
+
+.craft-arrow {
+  font-size: 30px;
+  color: var(--ui-muted);
+}
+
+.craft-result .slot {
+  width: 60px;
+  height: 60px;
+}
+
+.cursor-stack {
+  position: fixed;
+  pointer-events: none;
+  border: none;
+  background: none;
+  z-index: 5;
+}
+
+.item-tooltip {
+  position: fixed;
+  z-index: 6;
+  padding: 5px 9px;
+  border: 1px solid rgba(160, 110, 255, 0.6);
+  border-radius: 4px;
+  background: rgba(16, 8, 24, 0.94);
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+.tip-name {
+  font-weight: 700;
+}
+
+.tip-sub {
+  font-size: 12px;
+  color: var(--ui-muted);
+}
+
+.furnace-column {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+.furnace-flame {
+  position: relative;
+  width: 22px;
+  height: 22px;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.furnace-flame-fill {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 0;
+  background: linear-gradient(to top, #ff5a10, #ffd24a);
+}
+
+.furnace-arrow {
+  position: relative;
+  width: 60px;
+  height: 14px;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 7px;
+  overflow: hidden;
+}
+
+.furnace-arrow-fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 0;
+  background: #e8e8e8;
+}
+
+/* ---- Death screen ---- */
+
+.death-screen {
+  background: rgba(120, 0, 0, 0.45);
+}
+
+.death-title {
+  margin: 0 0 8px;
+  font-size: 40px;
+  color: #ff8a8a;
+  text-shadow: 3px 3px 0 #300;
+}
+
+.death-message {
+  margin: 0 0 18px;
+  color: var(--ui-muted);
+}

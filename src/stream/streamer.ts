@@ -269,6 +269,10 @@ export class Streamer {
             chunk.blocks.set(record.blocks);
             chunk.modified = true;
           }
+          if (record) {
+            const e = record.extras;
+            chunk.storedExtras = e.items.length > 0 || e.blockEntities.length > 0 || e.mobs.length > 0;
+          }
           this.world.addChunk(chunk);
           this.hooks.added?.(chunk, record);
         });

@@ -3,6 +3,7 @@ import { loadChunk, loadChunks, packChunks, saveBatch } from './save/db';
 import {
   chunkStoreKey,
   emptyExtras,
+  type ChunkExtras,
   newWorldId,
   WORLD_FORMAT_VERSION,
   type ChunkRecord,
@@ -47,6 +48,13 @@ export class WorldSession {
   lockDaytime: boolean;
   private queued: Promise<boolean> | null = null;
   private nextPlayer: PlayerRecord | null = null;
+  /**
+   * Entities and block entities stored with a chunk (set by the game);
+   * `remove` takes them out of the live world (the chunk is unloading).
+   */
+  extrasFor: (chunk: Chunk, remove: boolean) => ChunkExtras = () => emptyExtras();
+  /** Records read while opening a Classic world, for their entities. */
+  initialRecords: ChunkRecord[] = [];
 
   private constructor(
     readonly world: World,
@@ -92,11 +100,15 @@ export class WorldSession {
     );
     if (!record.spawn) record.spawn = findSpawn(level, size.sx, size.sy, size.sz);
     const world = World.fromClassicLevel(level, size.sx, size.sy, size.sz, record.seed);
+    let records: ChunkRecord[] = [];
     if (persistent) {
       progress('Reading saved chunks', 0.72);
-      applyRecords(world, await loadChunks(record.id));
+      records = await loadChunks(record.id);
+      applyRecords(world, records);
     }
-    return new WorldSession(world, record, persistent);
+    const session = new WorldSession(world, record, persistent);
+    session.initialRecords = records;
+    return session;
   }
 
   /**
@@ -157,17 +169,19 @@ export class WorldSession {
     return loadChunk(this.record.id, cx, cz);
   }
 
-  /** Chunks left memory: keep changed ones until they are written. */
+  /** Chunks left memory: keep changed ones (and their entities) until they are written. */
   chunksUnloaded(chunks: readonly Chunk[]): void {
-    if (!this.persistent) return;
     let queued = false;
     for (const c of chunks) {
-      if (!c.modified) continue;
+      const extras = this.extrasFor(c, true);
+      if (!this.persistent) continue;
+      const has = hasExtras(extras);
+      if (!c.modified && !has && !c.storedExtras) continue;
       this.pendingWrites.set(chunkStoreKey(this.record.id, c.cx, c.cz), {
         cx: c.cx,
         cz: c.cz,
-        blocks: c.blocks.slice(),
-        extras: emptyExtras(),
+        blocks: c.modified ? c.blocks.slice() : null,
+        extras,
       });
       queued = true;
     }
@@ -191,11 +205,14 @@ export class WorldSession {
     }
   }
 
-  /** Changed chunks that still need writing. */
+  /** Changed chunks (and chunks holding entities) that need writing. */
   unsavedChunks(): ChunkRecord[] {
     const out: ChunkRecord[] = [];
     for (const c of this.world.chunks.values()) {
-      if (c.modified && c.version !== c.savedVersion) out.push({ cx: c.cx, cz: c.cz, blocks: c.blocks.slice(), extras: emptyExtras() });
+      const extras = this.extrasFor(c, false);
+      const has = hasExtras(extras);
+      if (!(c.modified && c.version !== c.savedVersion) && !has && !c.storedExtras) continue;
+      out.push({ cx: c.cx, cz: c.cz, blocks: c.modified ? c.blocks.slice() : null, extras });
     }
     return out;
   }
@@ -239,6 +256,10 @@ export class WorldSession {
     };
     await saveBatch(this.record, await packChunks(this.record.id, chunks));
     for (const [key, rec] of pending) if (this.pendingWrites.get(key) === rec) this.pendingWrites.delete(key);
+    for (const rec of chunks) {
+      const c = this.world.getChunk(rec.cx, rec.cz);
+      if (c) c.storedExtras = hasExtras(rec.extras);
+    }
     for (const c of this.world.chunks.values()) {
       const v = versions.get(c.key);
       if (v !== undefined) c.savedVersion = v;
@@ -254,11 +275,17 @@ export class WorldSession {
   }
 }
 
+function hasExtras(e: ChunkExtras): boolean {
+  return e.items.length > 0 || e.blockEntities.length > 0 || e.mobs.length > 0;
+}
+
 /** Overwrite generated chunks with stored ones. */
 export function applyRecords(world: World, records: readonly ChunkRecord[]): void {
   for (const rec of records) {
     const chunk = world.getChunk(rec.cx, rec.cz);
-    if (!chunk || !rec.blocks) continue;
+    if (!chunk) continue;
+    chunk.storedExtras = hasExtras(rec.extras);
+    if (!rec.blocks) continue;
     chunk.blocks.set(rec.blocks);
     chunk.modified = true;
     world.addChunk(chunk);
