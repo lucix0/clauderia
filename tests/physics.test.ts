@@ -4,14 +4,13 @@ import { bodyOverlapsCell, createBody, moveBody, stepBody, type MoveInput } from
 import { collisionWorld } from '../src/player/player';
 import { B } from '../src/world/blocks';
 import { canPlace } from '../src/world/placement';
-import { World } from '../src/world/world';
+import type { World } from '../src/world/world';
+import { classicWorld } from './helpers';
 
 const idle: MoveInput = { forward: 0, strafe: 0, jump: false, down: false, yaw: 0 };
 
 function floorWorld(): World {
-  const w = new World(32, 32, 32, 0);
-  for (let z = 0; z < 32; z++) for (let x = 0; x < 32; x++) w.setBlock(x, 4, z, B.STONE);
-  return w;
+  return classicWorld(32, 32, 32, (_x, y) => (y === 4 ? B.STONE : B.AIR));
 }
 
 function run(world: World, body: ReturnType<typeof createBody>, input: MoveInput, seconds: number): void {

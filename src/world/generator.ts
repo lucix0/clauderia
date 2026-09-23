@@ -351,9 +351,8 @@ function plant(lvl: Level, rng: Rng): void {
   const { sx, sz, sy } = lvl;
   const area = sx * sz;
   const target = {
-    sx,
-    sy,
-    sz,
+    height: sy,
+    inside: (x: number, z: number) => x >= 0 && z >= 0 && x < sx && z < sz,
     get: (x: number, y: number, z: number) => lvl.get(x, y, z),
     set: (x: number, y: number, z: number, id: number) => lvl.set(x, y, z, id),
   };

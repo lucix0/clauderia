@@ -21,11 +21,16 @@ function main(): void {
   const sizeParam = params.get('size') ?? 'normal';
 
   const game = new Game(canvas, ui);
-  if (debug) window.__game = game;
+  // ?debug (or ?api for normal saved worlds) exposes the game for scripted tests.
+  if (debug || params.has('api')) window.__game = game;
   game.onWorldReady = () => {
     window.__ready = true;
   };
-  void game.boot({ debug, size: isWorldSizeName(sizeParam) ? sizeParam : 'normal' });
+  game.onWorldUnready = () => {
+    window.__ready = false;
+  };
+  const type = params.get('type') === 'classic' ? 'classic' : 'infinite';
+  void game.boot({ debug, type, size: isWorldSizeName(sizeParam) ? sizeParam : 'normal' });
 }
 
 main();

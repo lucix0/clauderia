@@ -1,8 +1,10 @@
 /**
  * Small isometric block icons drawn from the atlas canvas with 2D transforms.
- * Cross-shaped blocks get a flat sprite instead.
+ * Plants, torches, doors, ladders and fences get a flat picture instead.
  */
-import { ATLAS_TILES_PER_ROW, BLOCKS, SHAPE, SHAPE_CROSS, SHAPE_SLAB } from '../world/blocks';
+import { ITEM_FIRST } from '../items/items';
+import { ITEM_ATLAS_COLUMNS } from '../render/itemTiles';
+import { ATLAS_TILES_PER_ROW, BLOCKS, iconTile, shapeHeight } from '../world/blocks';
 
 const TILE = 16;
 
@@ -38,8 +40,9 @@ export function renderIcon(atlas: HTMLCanvasElement, id: number, size: number): 
   if (!ctx || !def) return canvas;
   ctx.imageSmoothingEnabled = false;
 
-  if (SHAPE[id] === SHAPE_CROSS) {
-    const t = def.tiles[2];
+  const flat = iconTile(id);
+  if (flat >= 0) {
+    const t = flat;
     const pad = size * 0.08;
     ctx.drawImage(
       atlas,
@@ -60,8 +63,8 @@ export function renderIcon(atlas: HTMLCanvasElement, id: number, size: number): 
   const ox = (size - s) / 2;
   const oy = (size - s) / 2;
   const k = s / TILE;
-  const slab = SHAPE[id] === SHAPE_SLAB;
-  const drop = slab ? s / 4 : 0; // top face sits half a block lower
+  const height = shapeHeight(id);
+  const drop = ((1 - height) * s) / 2; // partial blocks: the top face sits lower
   const top = def.tiles[2];
   const left = def.tiles[4]; // south face
   const right = def.tiles[0]; // east face
@@ -69,27 +72,43 @@ export function renderIcon(atlas: HTMLCanvasElement, id: number, size: number): 
   // Top: (0,0)→left corner, u → top corner, v → bottom corner.
   drawFace(ctx, atlas, top, [k / 2, -k / 4, k / 2, k / 4, ox, oy + s / 4 + drop], 1);
   // Left (south): u along the lower-left edge, v straight down.
-  const sideSrcY = slab ? TILE / 2 : 0;
-  const sideSrcH = slab ? TILE / 2 : TILE;
+  const sideSrcY = TILE * (1 - height);
+  const sideSrcH = TILE * height;
   drawFace(ctx, atlas, left, [k / 2, k / 4, 0, k / 2, ox, oy + s / 4], 0.8, sideSrcY, sideSrcH);
   // Right (east): from the front corner up to the right corner.
   drawFace(ctx, atlas, right, [k / 2, -k / 4, 0, k / 2, ox + s / 2, oy + s / 2], 0.6, sideSrcY, sideSrcH);
   return canvas;
 }
 
-/** Cache of icon data URLs, keyed by block id. */
+/** A non-block item's sprite, scaled up with hard pixels. */
+export function renderItemIcon(items: HTMLCanvasElement, id: number, size: number): HTMLCanvasElement {
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return canvas;
+  ctx.imageSmoothingEnabled = false;
+  const i = id - ITEM_FIRST;
+  const pad = size * 0.06;
+  ctx.drawImage(items, (i % ITEM_ATLAS_COLUMNS) * TILE, Math.floor(i / ITEM_ATLAS_COLUMNS) * TILE, TILE, TILE, pad, pad, size - pad * 2, size - pad * 2);
+  return canvas;
+}
+
+/** Cache of icon data URLs, keyed by item id (blocks and items). */
 export class IconCache {
   private readonly urls = new Map<number, string>();
 
   constructor(
     private readonly atlas: HTMLCanvasElement,
+    private readonly items: HTMLCanvasElement | null = null,
     private readonly size = 48,
   ) {}
 
   url(id: number): string {
     let u = this.urls.get(id);
     if (!u) {
-      u = renderIcon(this.atlas, id, this.size).toDataURL();
+      const canvas = id >= ITEM_FIRST && this.items ? renderItemIcon(this.items, id, this.size) : renderIcon(this.atlas, id, this.size);
+      u = canvas.toDataURL();
       this.urls.set(id, u);
     }
     return u;

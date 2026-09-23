@@ -1,9 +1,5 @@
 /** Shared tuning constants. Pure data — safe to import from any module. */
 
-/** Chunk edge length in blocks (chunks are cubic). 32³ keeps draw calls low. */
-export const CHUNK_SIZE = 32;
-export const CHUNK_SHIFT = 5;
-
 /** Fixed simulation rate. */
 export const STEP_HZ = 60;
 export const STEP_DT = 1 / STEP_HZ;
@@ -28,29 +24,22 @@ export const STEP_HEIGHT = 0.5;
 export const REACH = 5;
 export const ACTION_REPEAT_S = 0.25;
 
-/** Face brightness (Classic-style directional shading) and shadow multiplier. */
+/** Face brightness (Classic-style directional shading). */
 export const SHADE_TOP = 1.0;
 export const SHADE_Z = 0.8;
 export const SHADE_X = 0.6;
 export const SHADE_BOTTOM = 0.5;
-export const SHADOW = 0.6;
 
-export interface RenderDistancePreset {
-  readonly name: string;
-  readonly blocks: number;
-}
+/** Render distance presets in chunks (F cycles through them). */
+export const RENDER_DISTANCES: readonly number[] = [4, 6, 8, 12, 16];
+export const DEFAULT_RENDER_DISTANCE = 8;
+export const MIN_RENDER_DISTANCE = 4;
+export const MAX_RENDER_DISTANCE = 16;
 
-export const RENDER_DISTANCES: readonly RenderDistancePreset[] = [
-  { name: 'Tiny', blocks: 32 },
-  { name: 'Short', blocks: 64 },
-  { name: 'Normal', blocks: 128 },
-  { name: 'Far', blocks: 256 },
-  { name: 'Extreme', blocks: 512 },
-];
-export const DEFAULT_RENDER_DISTANCE = 3;
-
-/** Per-frame time budget for background chunk remeshing, in milliseconds. */
-export const REMESH_BUDGET_MS = 4;
+/** Per-frame time budget for main-thread remeshing of edited sections, in ms. */
+export const REMESH_BUDGET_MS = 3;
+/** Per-frame time budget for uploading worker-built meshes, in ms. */
+export const UPLOAD_BUDGET_MS = 3;
 
 export const AUTOSAVE_S = 60;
 

@@ -23,6 +23,13 @@ export interface CollisionWorld {
   solidHeight(x: number, y: number, z: number): number;
   /** Liquid in a cell: 0 none, 1 water, 2 lava. */
   liquidAt(x: number, y: number, z: number): number;
+  /**
+   * Collision boxes of a shaped cell (doors, fences, ladders) in cell units,
+   * or null to use solidHeight. Boxes may reach above the cell (fences).
+   */
+  boxes?(x: number, y: number, z: number): ReadonlyArray<readonly number[]> | null;
+  /** Can a body climb in this cell (ladders)? */
+  climbable?(x: number, y: number, z: number): boolean;
 }
 
 export interface Body {
@@ -39,6 +46,11 @@ export interface Body {
   flying: boolean;
   /** 0 none, 1 water, 2 lava (body immersion). */
   liquid: number;
+  /** Collision box size (the player's by default; items and mobs differ). */
+  width: number;
+  height: number;
+  /** On a ladder: falls slowly and climbs instead of jumping. */
+  climbing: boolean;
 }
 
 export interface MoveInput {
@@ -51,14 +63,22 @@ export interface MoveInput {
   down: boolean;
   /** Facing, radians. yaw 0 looks toward -Z. */
   yaw: number;
+  /** Walking speed multiplier (sprinting 1.3, sneaking 0.3; default 1). */
+  speed?: number;
+  /** Sneaking: never walk off an edge while on the ground. */
+  sneak?: boolean;
+  /** Base walking speed (blocks/s) for this body; the player's by default. */
+  walkSpeed?: number;
 }
 
-export function createBody(x: number, y: number, z: number): Body {
-  return { x, y, z, vx: 0, vy: 0, vz: 0, onGround: false, hitWall: false, flying: false, liquid: 0 };
+export function createBody(x: number, y: number, z: number, width = PLAYER_WIDTH, height = PLAYER_HEIGHT): Body {
+  return { x, y, z, vx: 0, vy: 0, vz: 0, onGround: false, hitWall: false, flying: false, liquid: 0, width, height, climbing: false };
 }
 
-const HALF = PLAYER_WIDTH / 2;
 const EPS = 1e-7;
+/** Blocks per second up a ladder, and the fastest slide down one. */
+export const CLIMB_SPEED = 2.4;
+export const CLIMB_SLIDE = 2.5;
 
 interface Box {
   minX: number;
@@ -69,8 +89,9 @@ interface Box {
   maxZ: number;
 }
 
-function bodyBox(x: number, y: number, z: number): Box {
-  return { minX: x - HALF, minY: y, minZ: z - HALF, maxX: x + HALF, maxY: y + PLAYER_HEIGHT, maxZ: z + HALF };
+function bodyBox(body: Body): Box {
+  const h = body.width / 2;
+  return { minX: body.x - h, minY: body.y, minZ: body.z - h, maxX: body.x + h, maxY: body.y + body.height, maxZ: body.z + h };
 }
 
 /** Collect the collision boxes of every solid cell touching the swept region. */
@@ -85,6 +106,11 @@ function gatherBoxes(world: CollisionWorld, b: Box, dx: number, dy: number, dz: 
   for (let y = minY; y <= maxY; y++) {
     for (let z = minZ; z <= maxZ; z++) {
       for (let x = minX; x <= maxX; x++) {
+        const custom = world.boxes?.(x, y, z);
+        if (custom) {
+          for (const c of custom) out.push({ minX: x + c[0]!, minY: y + c[1]!, minZ: z + c[2]!, maxX: x + c[3]!, maxY: y + c[4]!, maxZ: z + c[5]! });
+          continue;
+        }
         const h = world.solidHeight(x, y, z);
         if (h > 0) out.push({ minX: x, minY: y, minZ: z, maxX: x + 1, maxY: y + h, maxZ: z + 1 });
       }
@@ -162,7 +188,7 @@ function sweep(world: CollisionWorld, start: Box, dx: number, dy: number, dz: nu
  * onto ledges up to STEP_HEIGHT (slabs).
  */
 export function moveBody(world: CollisionWorld, body: Body, dx: number, dy: number, dz: number): MoveResult {
-  const start = bodyBox(body.x, body.y, body.z);
+  const start = bodyBox(body);
   let r = sweep(world, start, dx, dy, dz);
 
   const blockedH = Math.abs(r.dx - dx) > EPS || Math.abs(r.dz - dz) > EPS;
@@ -190,12 +216,13 @@ export function moveBody(world: CollisionWorld, body: Body, dx: number, dy: numb
 
 /** Which liquid the body is immersed in (lava wins). */
 export function liquidAround(world: CollisionWorld, body: Body): number {
-  const x0 = Math.floor(body.x - HALF + 0.001);
-  const x1 = Math.floor(body.x + HALF - 0.001);
-  const z0 = Math.floor(body.z - HALF + 0.001);
-  const z1 = Math.floor(body.z + HALF - 0.001);
-  const y0 = Math.floor(body.y + 0.1);
-  const y1 = Math.floor(body.y + PLAYER_HEIGHT * 0.6);
+  const half = body.width / 2;
+  const x0 = Math.floor(body.x - half + 0.001);
+  const x1 = Math.floor(body.x + half - 0.001);
+  const z0 = Math.floor(body.z - half + 0.001);
+  const z1 = Math.floor(body.z + half - 0.001);
+  const y0 = Math.floor(body.y + Math.min(0.1, body.height * 0.2));
+  const y1 = Math.floor(body.y + body.height * 0.6);
   let found = 0;
   for (let y = y0; y <= y1; y++) {
     for (let z = z0; z <= z1; z++) {
@@ -211,7 +238,7 @@ export function liquidAround(world: CollisionWorld, body: Body): number {
 
 /** Does the player's box overlap cell (x, y, z) with a collision box of height h? */
 export function bodyOverlapsCell(body: Body, x: number, y: number, z: number, h = 1): boolean {
-  const b = bodyBox(body.x, body.y, body.z);
+  const b = bodyBox(body);
   return b.maxX > x + EPS && b.minX < x + 1 - EPS && b.maxY > y + EPS && b.minY < y + h - EPS && b.maxZ > z + EPS && b.minZ < z + 1 - EPS;
 }
 
@@ -219,9 +246,26 @@ function approach(v: number, target: number, rate: number, dt: number): number {
   return v + (target - v) * (1 - Math.exp(-rate * dt));
 }
 
+/** Is any cell the body's lower half is in climbable? */
+function onClimbable(world: CollisionWorld, body: Body): boolean {
+  if (!world.climbable) return false;
+  const half = body.width / 2;
+  const x0 = Math.floor(body.x - half);
+  const x1 = Math.floor(body.x + half);
+  const z0 = Math.floor(body.z - half);
+  const z1 = Math.floor(body.z + half);
+  const y0 = Math.floor(body.y);
+  const y1 = Math.floor(body.y + body.height * 0.4);
+  for (let y = y0; y <= y1; y++) {
+    for (let z = z0; z <= z1; z++) for (let x = x0; x <= x1; x++) if (world.climbable(x, y, z)) return true;
+  }
+  return false;
+}
+
 /** Advance the body by one fixed step. */
 export function stepBody(world: CollisionWorld, body: Body, input: MoveInput, dt: number): void {
   body.liquid = body.flying ? 0 : liquidAround(world, body);
+  body.climbing = !body.flying && !body.liquid && onClimbable(world, body);
 
   // Wish direction on the ground plane.
   let fx = input.forward;
@@ -237,6 +281,7 @@ export function stepBody(world: CollisionWorld, body: Body, input: MoveInput, dt
   const wishX = -sin * fx + cos * fs;
   const wishZ = -cos * fx - sin * fs;
 
+  const walk = input.walkSpeed ?? WALK_SPEED;
   let dy: number;
   if (body.flying) {
     body.vx = approach(body.vx, wishX * FLY_SPEED, 12, dt);
@@ -245,9 +290,9 @@ export function stepBody(world: CollisionWorld, body: Body, input: MoveInput, dt
     body.vy = approach(body.vy, vertical * FLY_VERTICAL_SPEED, 12, dt);
     dy = body.vy * dt;
   } else if (body.liquid) {
-    const mul = body.liquid === 2 ? 0.35 : 0.5;
-    body.vx = approach(body.vx, wishX * WALK_SPEED * mul, 8, dt);
-    body.vz = approach(body.vz, wishZ * WALK_SPEED * mul, 8, dt);
+    const mul = (body.liquid === 2 ? 0.35 : 0.5) * Math.min(1, input.speed ?? 1);
+    body.vx = approach(body.vx, wishX * walk * mul, 8, dt);
+    body.vz = approach(body.vz, wishZ * walk * mul, 8, dt);
     if (input.jump) {
       body.vy = approach(body.vy, body.liquid === 2 ? 2.2 : 3.2, 6, dt);
       // Climb out over a ledge.
@@ -258,16 +303,32 @@ export function stepBody(world: CollisionWorld, body: Body, input: MoveInput, dt
     dy = body.vy * dt;
   } else {
     const rate = body.onGround ? 20 : 6;
-    body.vx = approach(body.vx, wishX * WALK_SPEED, rate, dt);
-    body.vz = approach(body.vz, wishZ * WALK_SPEED, rate, dt);
-    if (input.jump && body.onGround) body.vy = JUMP_VELOCITY;
-    // Exact parabola over the step (velocity Verlet) so jump height matches.
-    dy = body.vy * dt - 0.5 * GRAVITY * dt * dt;
-    body.vy = Math.max(-TERMINAL_VELOCITY, body.vy - GRAVITY * dt);
+    const speed = walk * (input.speed ?? 1);
+    body.vx = approach(body.vx, wishX * speed, rate, dt);
+    body.vz = approach(body.vz, wishZ * speed, rate, dt);
+    if (body.climbing) {
+      // Ladders: jump or push into the ladder to climb, sneak to hold on, else slide down slowly.
+      if (input.jump || (fx > 0 && body.hitWall)) body.vy = CLIMB_SPEED;
+      else if (input.sneak) body.vy = 0;
+      else body.vy = Math.max(body.vy - GRAVITY * dt, -CLIMB_SLIDE);
+      dy = body.vy * dt;
+    } else {
+      if (input.jump && body.onGround) body.vy = JUMP_VELOCITY;
+      // Exact parabola over the step (velocity Verlet) so jump height matches.
+      dy = body.vy * dt - 0.5 * GRAVITY * dt * dt;
+      body.vy = Math.max(-TERMINAL_VELOCITY, body.vy - GRAVITY * dt);
+    }
   }
 
   const wasOnGround = body.onGround;
-  const r = moveBody(world, body, body.vx * dt, dy, body.vz * dt);
+  let mx = body.vx * dt;
+  let mz = body.vz * dt;
+  if (input.sneak && body.onGround && !body.flying && !body.liquid && dy <= 0) {
+    [mx, mz] = guardEdge(world, body, mx, mz);
+    if (mx !== body.vx * dt) body.vx = 0;
+    if (mz !== body.vz * dt) body.vz = 0;
+  }
+  const r = moveBody(world, body, mx, dy, mz);
   if (r.hitX) body.vx = 0;
   if (r.hitZ) body.vz = 0;
   body.hitWall = r.hitX || r.hitZ;
@@ -282,7 +343,31 @@ export function stepBody(world: CollisionWorld, body: Body, input: MoveInput, dt
 }
 
 function probeGround(world: CollisionWorld, body: Body): boolean {
-  const b = bodyBox(body.x, body.y, body.z);
+  const b = bodyBox(body);
   const boxes = gatherBoxes(world, b, 0, -0.01, 0);
   return clipY(boxes, b, -0.01) > -0.01 + EPS;
+}
+
+/** Is there ground within a step below the body's box moved by (dx, dz)? */
+function supported(world: CollisionWorld, body: Body, dx: number, dz: number): boolean {
+  const b = offset(bodyBox(body), dx, 0, dz);
+  const drop = -STEP_HEIGHT - 0.1;
+  const boxes = gatherBoxes(world, b, 0, drop, 0);
+  return clipY(boxes, b, drop) > drop + EPS;
+}
+
+/**
+ * Sneaking: shrink a horizontal move so the body keeps ground under it
+ * (each axis on its own, then together), like leaning over a ledge.
+ */
+function guardEdge(world: CollisionWorld, body: Body, dx: number, dz: number): [number, number] {
+  const STEP = 0.05;
+  const shrink = (v: number): number => (Math.abs(v) <= STEP ? 0 : v - Math.sign(v) * STEP);
+  while (dx !== 0 && !supported(world, body, dx, 0)) dx = shrink(dx);
+  while (dz !== 0 && !supported(world, body, 0, dz)) dz = shrink(dz);
+  while (dx !== 0 && dz !== 0 && !supported(world, body, dx, dz)) {
+    dx = shrink(dx);
+    dz = shrink(dz);
+  }
+  return [dx, dz];
 }

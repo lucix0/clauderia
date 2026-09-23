@@ -56,8 +56,11 @@ describe('save round-trip', () => {
 
 describe('settings', () => {
   it('fills defaults and clamps bad values', () => {
-    expect(sanitizeSettings(null)).toEqual({ sensitivity: 1, fov: 70, renderDistance: 3, invertY: false });
-    const s = sanitizeSettings({ sensitivity: 99, fov: 'wide', renderDistance: -3, invertY: true });
-    expect(s).toEqual({ sensitivity: 4, fov: 70, renderDistance: 0, invertY: true });
+    expect(sanitizeSettings(null)).toEqual({ sensitivity: 1, fov: 70, renderDistance: 8, invertY: false, smoothLighting: true, volume: 0.7 });
+    const s = sanitizeSettings({ sensitivity: 99, fov: 'wide', renderDistance: -3, invertY: true, smoothLighting: 'yes', volume: 3 });
+    expect(s).toEqual({ sensitivity: 4, fov: 70, renderDistance: 4, invertY: true, smoothLighting: true, volume: 1 });
+    expect(sanitizeSettings({ smoothLighting: false }).smoothLighting).toBe(false);
+    expect(sanitizeSettings({ volume: 0 }).volume).toBe(0);
+    expect(sanitizeSettings({ renderDistance: 40 }).renderDistance).toBe(16);
   });
 });

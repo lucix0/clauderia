@@ -3,9 +3,11 @@ import { B } from './blocks';
 
 /** Minimal block access used by tree growth (generator array or live world). */
 export interface TreeTarget {
-  readonly sx: number;
-  readonly sy: number;
-  readonly sz: number;
+  /** Build height. */
+  readonly height: number;
+  /** Can blocks be placed in column (x, z)? */
+  inside(x: number, z: number): boolean;
+  /** Block id at a cell. */
   get(x: number, y: number, z: number): number;
   set(x: number, y: number, z: number, id: number): void;
 }
@@ -17,7 +19,7 @@ export interface TreeTarget {
 export function growTree(t: TreeTarget, rng: Rng, x: number, y: number, z: number): boolean {
   const height = 4 + rng.int(3);
   const top = y + height;
-  if (top + 1 >= t.sy) return false;
+  if (top + 1 >= t.height) return false;
   // Room check: trunk column plus the canopy volume must be clear.
   for (let yy = y; yy <= top; yy++) {
     const r = yy < top - 3 ? 0 : yy < top - 1 ? 2 : 1;
@@ -25,7 +27,7 @@ export function growTree(t: TreeTarget, rng: Rng, x: number, y: number, z: numbe
       for (let dx = -r; dx <= r; dx++) {
         const cx = x + dx;
         const cz = z + dz;
-        if (cx < 0 || cz < 0 || cx >= t.sx || cz >= t.sz) return false;
+        if (!t.inside(cx, cz)) return false;
         const id = t.get(cx, yy, cz);
         const trunkBase = yy === y && dx === 0 && dz === 0;
         if (id !== B.AIR && !(trunkBase && id === B.SAPLING)) return false;
