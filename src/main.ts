@@ -21,7 +21,8 @@ function main(): void {
   const sizeParam = params.get('size') ?? 'normal';
 
   const game = new Game(canvas, ui);
-  if (debug) window.__game = game;
+  // ?debug (or ?api for normal saved worlds) exposes the game for scripted tests.
+  if (debug || params.has('api')) window.__game = game;
   game.onWorldReady = () => {
     window.__ready = true;
   };

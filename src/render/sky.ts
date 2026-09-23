@@ -29,6 +29,8 @@ export class Sky {
   private readonly waterTex: THREE.Texture;
   private readonly floorTex: THREE.Texture;
   private readonly background = new THREE.Color();
+  private cloudHeight = 66;
+  private cloudDrift = 0;
 
   constructor(scene: THREE.Scene, atlas: Atlas) {
     scene.fog = this.fog;
@@ -77,8 +79,11 @@ export class Sky {
       this.edge.remove(child);
       if (child instanceof THREE.Mesh) child.geometry.dispose();
     }
+    this.cloudHeight = world.height + 2;
+    const bounds = world.bounds;
+    if (!bounds) return;
     const water = new THREE.Mesh(
-      ringGeometry(world.sx, world.sz, world.seaLevel),
+      ringGeometry(bounds.sx, bounds.sz, world.seaLevel),
       new THREE.MeshBasicMaterial({
         map: this.waterTex,
         transparent: true,
@@ -89,18 +94,22 @@ export class Sky {
     water.name = 'edge-water';
     water.renderOrder = 1;
     const floor = new THREE.Mesh(
-      ringGeometry(world.sx, world.sz, world.edgeFloor),
+      ringGeometry(bounds.sx, bounds.sz, world.edgeFloor),
       new THREE.MeshBasicMaterial({ map: this.floorTex, color: new THREE.Color(0.75, 0.75, 0.75) }),
     );
     floor.name = 'edge-floor';
     this.edge.add(floor, water);
-    this.clouds.position.set(world.sx / 2, world.sy + 2, world.sz / 2);
   }
 
   update(dt: number, camera: THREE.Camera, medium: Medium, renderDistance: number): void {
     this.dome.position.copy(camera.position);
-    this.cloudTex.offset.x += (dt * CLOUD_SPEED) / (CLOUD_TEXELS * CLOUD_TEXEL_BLOCKS);
-    this.cloudTex.offset.x %= 1;
+    // The cloud plane follows the camera; its texture stays fixed in the world.
+    const span = CLOUD_TEXELS * CLOUD_TEXEL_BLOCKS;
+    this.cloudDrift = (this.cloudDrift + dt * CLOUD_SPEED) % span;
+    const cx = Math.round(camera.position.x);
+    const cz = Math.round(camera.position.z);
+    this.clouds.position.set(cx, this.cloudHeight, cz);
+    this.cloudTex.offset.set(((cx + this.cloudDrift) / span) % 1, (cz / span) % 1);
 
     if (medium === 'water') {
       this.fog.color.copy(FOG_WATER);

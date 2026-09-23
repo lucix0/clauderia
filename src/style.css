@@ -469,3 +469,73 @@ kbd {
   text-shadow: 1px 1px 0 #000;
   white-space: pre;
 }
+
+/* ---- Title screen ---- */
+
+.title-screen {
+  background: radial-gradient(ellipse at center, rgba(28, 42, 64, 0.72) 0%, rgba(8, 11, 18, 0.9) 80%);
+}
+
+.title-menu {
+  width: min(94vw, 560px);
+}
+
+.world-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: min(52vh, 420px);
+  overflow-y: auto;
+  margin: 6px 0 12px;
+  text-align: left;
+}
+
+.world-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--ui-border);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.world-row:hover {
+  background: rgba(255, 255, 255, 0.09);
+}
+
+.world-name {
+  font-weight: 700;
+  font-size: 15px;
+}
+
+.world-meta {
+  font-size: 12px;
+  color: var(--ui-muted);
+}
+
+.world-empty {
+  margin: 18px 0;
+  text-align: center;
+  color: var(--ui-muted);
+}
+
+.btn-small {
+  padding: 6px 12px;
+  font-size: 13px;
+}
+
+.btn-danger {
+  background: #a33a2f;
+  border-color: #cf5a4d;
+}
+
+.btn-danger:hover:not(:disabled) {
+  background: #bd4538;
+}
+
+.confirm-text {
+  margin: 4px 0 16px;
+  color: var(--ui-text);
+}

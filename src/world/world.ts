@@ -1,89 +1,172 @@
-import { CHUNK_SHIFT, CHUNK_SIZE } from '../config';
-import { B, IS_PLANT, supportsPlant } from './blocks';
-import { HeightMap } from './heightmap';
+import { B, BLOCKS_LIGHT, idOf, IS_PLANT, supportsPlant } from './blocks';
+import { Chunk } from './chunk';
+import {
+  CHUNK_HEIGHT,
+  CHUNK_SIZE,
+  SECTION_SIZE,
+  chunkKey,
+  localIndex,
+  toChunk,
+  toLocal,
+} from './coords';
 
-export type BlockListener = (x: number, y: number, z: number, oldId: number, newId: number) => void;
+export type WorldType = 'classic' | 'infinite';
+
+/** Called after every successful block change. Values are full 16-bit block values. */
+export type BlockListener = (x: number, y: number, z: number, oldValue: number, newValue: number) => void;
+
+export interface WorldOptions {
+  type: WorldType;
+  seed: number;
+  /** Build height (Classic 64, Infinite 128). */
+  height: number;
+  seaLevel: number;
+  /** Classic worlds only: size of the map in blocks. */
+  bounds?: { sx: number; sz: number } | null;
+}
 
 /**
- * Fixed-size voxel world stored as a flat Uint8Array, indexed
- * `(y * sz + z) * sx + x`. Every block change goes through `setBlock`.
+ * Voxel world stored as 16×16×128 chunk columns in a map. Every block change
+ * goes through `setBlock`.
  */
 export class World {
-  readonly blocks: Uint8Array;
-  readonly heightMap: HeightMap;
+  readonly type: WorldType;
+  readonly seed: number;
+  readonly height: number;
   /** Water fills cells with y < seaLevel; the surface sits at y = seaLevel. */
   readonly seaLevel: number;
-  /** Outside the map, cells with y < edgeFloor are bedrock. */
+  /** Classic: outside the map, cells with y < edgeFloor are bedrock. */
   readonly edgeFloor: number;
-  readonly chunksX: number;
-  readonly chunksY: number;
-  readonly chunksZ: number;
-  /** Chunk indices whose meshes are stale. Consumed by the renderer. */
-  readonly dirty = new Set<number>();
-  /** Number of setBlock calls that changed something (for stats). */
+  readonly bounds: { sx: number; sz: number } | null;
+  readonly chunks = new Map<number, Chunk>();
+  /** Chunks with at least one stale section mesh. Consumed by the renderer. */
+  readonly dirtyChunks = new Set<Chunk>();
+  /** Number of block changes (stats). */
   changeCount = 0;
   private readonly listeners: BlockListener[] = [];
 
-  constructor(
-    readonly sx: number,
-    readonly sy: number,
-    readonly sz: number,
-    readonly seed: number,
-    blocks?: Uint8Array,
-  ) {
-    const volume = sx * sy * sz;
-    if (blocks && blocks.length !== volume) {
-      throw new Error(`Block array has ${blocks.length} entries, expected ${volume}`);
-    }
-    this.blocks = blocks ?? new Uint8Array(volume);
-    this.seaLevel = Math.floor(sy / 2);
+  constructor(opts: WorldOptions) {
+    this.type = opts.type;
+    this.seed = opts.seed >>> 0;
+    this.height = Math.min(CHUNK_HEIGHT, opts.height);
+    this.seaLevel = opts.seaLevel;
     this.edgeFloor = this.seaLevel - 2;
-    this.chunksX = Math.ceil(sx / CHUNK_SIZE);
-    this.chunksY = Math.ceil(sy / CHUNK_SIZE);
-    this.chunksZ = Math.ceil(sz / CHUNK_SIZE);
-    this.heightMap = new HeightMap(sx, sy, sz);
-    this.heightMap.recomputeAll(this.blocks);
-  }
-
-  get volume(): number {
-    return this.blocks.length;
-  }
-
-  get chunkCount(): number {
-    return this.chunksX * this.chunksY * this.chunksZ;
-  }
-
-  index(x: number, y: number, z: number): number {
-    return (y * this.sz + z) * this.sx + x;
-  }
-
-  inBounds(x: number, y: number, z: number): boolean {
-    return x >= 0 && y >= 0 && z >= 0 && x < this.sx && y < this.sy && z < this.sz;
-  }
-
-  /** Block id at a cell; air outside the map. */
-  get(x: number, y: number, z: number): number {
-    if (x < 0 || y < 0 || z < 0 || x >= this.sx || y >= this.sy || z >= this.sz) return B.AIR;
-    return this.blocks[(y * this.sz + z) * this.sx + x]!;
+    this.bounds = opts.bounds ?? null;
   }
 
   /**
-   * Block id including the virtual surroundings: bedrock below the map and
-   * under the edge ocean, water up to sea level outside the map, air above.
+   * Build a Classic world from a flat level array indexed
+   * `(y * sz + z) * sx + x` (the finite generator's layout).
+   */
+  static fromClassicLevel(blocks: Uint8Array, sx: number, sy: number, sz: number, seed: number): World {
+    if (blocks.length !== sx * sy * sz) throw new Error('Level array does not match its size');
+    if (sx % CHUNK_SIZE || sz % CHUNK_SIZE) throw new Error('Classic sizes must be multiples of 16');
+    const world = new World({ type: 'classic', seed, height: sy, seaLevel: Math.floor(sy / 2), bounds: { sx, sz } });
+    for (let cz = 0; cz < sz / CHUNK_SIZE; cz++) {
+      for (let cx = 0; cx < sx / CHUNK_SIZE; cx++) {
+        const chunk = new Chunk(cx, cz);
+        const out = chunk.blocks;
+        for (let y = 0; y < sy; y++) {
+          for (let lz = 0; lz < CHUNK_SIZE; lz++) {
+            const src = (y * sz + cz * CHUNK_SIZE + lz) * sx + cx * CHUNK_SIZE;
+            const dst = localIndex(0, y, lz);
+            for (let lx = 0; lx < CHUNK_SIZE; lx++) out[dst + lx] = blocks[src + lx]!;
+          }
+        }
+        world.addChunk(chunk);
+      }
+    }
+    return world;
+  }
+
+  /** Flatten a Classic world back to the finite generator's layout. */
+  toClassicLevel(): Uint8Array {
+    const b = this.bounds;
+    if (!b) throw new Error('Only Classic worlds have a flat level');
+    const sy = this.height;
+    const out = new Uint8Array(b.sx * sy * b.sz);
+    for (let y = 0; y < sy; y++) {
+      for (let z = 0; z < b.sz; z++) {
+        for (let x = 0; x < b.sx; x++) out[(y * b.sz + z) * b.sx + x] = idOf(this.get(x, y, z));
+      }
+    }
+    return out;
+  }
+
+  // ---- Chunks ----
+
+  getChunk(cx: number, cz: number): Chunk | undefined {
+    return this.chunks.get(chunkKey(cx, cz));
+  }
+
+  chunkAt(x: number, z: number): Chunk | undefined {
+    return this.chunks.get(chunkKey(toChunk(x), toChunk(z)));
+  }
+
+  /** Add a generated (or loaded) chunk. */
+  addChunk(chunk: Chunk): void {
+    this.chunks.set(chunk.key, chunk);
+    chunk.updateNonEmpty();
+    this.recomputeHeights(chunk);
+    chunk.markAllDirty();
+    this.dirtyChunks.add(chunk);
+  }
+
+  removeChunk(chunk: Chunk): void {
+    this.chunks.delete(chunk.key);
+    this.dirtyChunks.delete(chunk);
+  }
+
+  /** Is (x, z) inside the playable area (Classic bounds; always for Infinite)? */
+  inColumnBounds(x: number, z: number): boolean {
+    const b = this.bounds;
+    return !b || (x >= 0 && z >= 0 && x < b.sx && z < b.sz);
+  }
+
+  /** Inside the build volume of a loaded chunk. */
+  inBounds(x: number, y: number, z: number): boolean {
+    return y >= 0 && y < this.height && this.inColumnBounds(x, z) && this.chunkAt(x, z) !== undefined;
+  }
+
+  isLoaded(x: number, z: number): boolean {
+    return this.chunkAt(x, z) !== undefined;
+  }
+
+  // ---- Blocks ----
+
+  /** Block value (id | state << 8); air when unloaded or out of range. */
+  get(x: number, y: number, z: number): number {
+    if (y < 0 || y >= CHUNK_HEIGHT) return B.AIR;
+    const c = this.chunks.get(chunkKey(x >> 4, z >> 4));
+    return c ? c.blocks[(y << 8) | ((z & 15) << 4) | (x & 15)]! : B.AIR;
+  }
+
+  /** Block id at a cell. */
+  getId(x: number, y: number, z: number): number {
+    return this.get(x, y, z) & 0xff;
+  }
+
+  /**
+   * Block value including the virtual surroundings: bedrock below the world;
+   * for Classic, the edge ocean (bedrock below edgeFloor, water to sea level)
+   * outside the map.
    */
   getVirtual(x: number, y: number, z: number): number {
     if (y < 0) return B.BEDROCK;
-    if (y >= this.sy) return B.AIR;
-    if (x < 0 || z < 0 || x >= this.sx || z >= this.sz) {
+    if (y >= CHUNK_HEIGHT) return B.AIR;
+    if (!this.inColumnBounds(x, z)) {
       if (y < this.edgeFloor) return B.BEDROCK;
       if (y < this.seaLevel) return B.WATER;
       return B.AIR;
     }
-    return this.blocks[(y * this.sz + z) * this.sx + x]!;
+    return this.get(x, y, z);
   }
 
+  /** Classic column shadow: lit when above the highest light-blocking block. */
   isLit(x: number, y: number, z: number): boolean {
-    return this.heightMap.isLit(x, y, z);
+    const c = this.chunkAt(x, z);
+    if (!c) return true;
+    return y > c.heights[((z & 15) << 4) | (x & 15)]!;
   }
 
   addListener(listener: BlockListener): void {
@@ -96,81 +179,116 @@ export class World {
   }
 
   /**
-   * The single entry point for block changes. Updates the light height map,
-   * marks affected chunks dirty and applies neighbour effects:
+   * The single entry point for block changes. Updates light heights, marks
+   * affected sections dirty and applies neighbour effects:
    * - a slab placed on a slab merges into a double slab;
    * - plants pop off when the block under them stops supporting them.
    * Returns true when anything changed.
    */
-  setBlock(x: number, y: number, z: number, id: number): boolean {
+  setBlock(x: number, y: number, z: number, value: number): boolean {
     if (!this.inBounds(x, y, z)) return false;
-    const i = this.index(x, y, z);
-    const old = this.blocks[i]!;
-    if (old === id) return false;
+    const chunk = this.chunkAt(x, z)!;
+    const lx = toLocal(x);
+    const lz = toLocal(z);
+    const i = localIndex(lx, y, lz);
+    const old = chunk.blocks[i]!;
+    if (old === value) return false;
 
-    if (id === B.SLAB && y > 0 && this.blocks[i - this.sx * this.sz] === B.SLAB) {
+    const id = idOf(value);
+    if (id === B.SLAB && y > 0 && idOf(chunk.blocks[i - 256]!) === B.SLAB) {
       return this.setBlock(x, y - 1, z, B.DOUBLE_SLAB);
     }
 
-    this.blocks[i] = id;
+    chunk.blocks[i] = value;
+    chunk.modified = true;
+    chunk.version++;
+    if (id !== B.AIR) chunk.nonEmpty |= 1 << (y >> 4);
     this.changeCount++;
     this.markCellDirty(x, y, z);
 
-    const oldH = this.heightMap.update(this.blocks, x, y, z, id);
-    const newH = this.heightMap.get(x, z);
+    const col = (lz << 4) | lx;
+    const oldH = chunk.heights[col]!;
+    this.updateHeight(chunk, col, y, id);
+    const newH = chunk.heights[col]!;
     if (oldH !== newH) this.markLightDirty(x, z, oldH, newH);
 
-    for (const listener of this.listeners) listener(x, y, z, old, id);
+    for (const listener of this.listeners) listener(x, y, z, old, value);
 
     // Plants pop off when their support goes away.
-    if (y + 1 < this.sy && !supportsPlant(id)) {
-      const above = this.blocks[i + this.sx * this.sz]!;
+    if (y + 1 < this.height && !supportsPlant(id)) {
+      const above = idOf(chunk.blocks[i + 256]!);
       if (IS_PLANT[above]) this.setBlock(x, y + 1, z, B.AIR);
     }
     return true;
   }
 
-  chunkIndex(cx: number, cy: number, cz: number): number {
-    return (cy * this.chunksZ + cz) * this.chunksX + cx;
+  // ---- Classic column shadows ----
+
+  recomputeHeights(chunk: Chunk): void {
+    const b = chunk.blocks;
+    for (let col = 0; col < 256; col++) {
+      let h = -1;
+      for (let y = CHUNK_HEIGHT - 1; y >= 0; y--) {
+        if (BLOCKS_LIGHT[b[(y << 8) | col]! & 0xff]) {
+          h = y;
+          break;
+        }
+      }
+      chunk.heights[col] = h;
+    }
   }
 
-  markChunkDirty(cx: number, cy: number, cz: number): void {
-    if (cx < 0 || cy < 0 || cz < 0 || cx >= this.chunksX || cy >= this.chunksY || cz >= this.chunksZ) return;
-    this.dirty.add(this.chunkIndex(cx, cy, cz));
+  private updateHeight(chunk: Chunk, col: number, y: number, id: number): void {
+    const old = chunk.heights[col]!;
+    if (BLOCKS_LIGHT[id]) {
+      if (y > old) chunk.heights[col] = y;
+    } else if (y === old) {
+      let h = -1;
+      for (let yy = y - 1; yy >= 0; yy--) {
+        if (BLOCKS_LIGHT[chunk.blocks[(yy << 8) | col]! & 0xff]) {
+          h = yy;
+          break;
+        }
+      }
+      chunk.heights[col] = h;
+    }
   }
 
-  markAllDirty(): void {
-    for (let i = 0; i < this.chunkCount; i++) this.dirty.add(i);
+  // ---- Dirty tracking ----
+
+  markSectionDirty(cx: number, sy: number, cz: number): void {
+    if (sy < 0 || sy * SECTION_SIZE >= CHUNK_HEIGHT) return;
+    const c = this.getChunk(cx, cz);
+    if (!c) return;
+    c.dirtySections |= 1 << sy;
+    this.dirtyChunks.add(c);
   }
 
-  /** Dirty the cell's chunk plus any chunk that shares the touched faces. */
+  /** Dirty the cell's section plus any section sharing the touched faces. */
   markCellDirty(x: number, y: number, z: number): void {
-    const cx = x >> CHUNK_SHIFT;
-    const cy = y >> CHUNK_SHIFT;
-    const cz = z >> CHUNK_SHIFT;
-    this.markChunkDirty(cx, cy, cz);
-    const m = CHUNK_SIZE - 1;
-    const lx = x & m;
-    const ly = y & m;
-    const lz = z & m;
-    if (lx === 0) this.markChunkDirty(cx - 1, cy, cz);
-    else if (lx === m) this.markChunkDirty(cx + 1, cy, cz);
-    if (ly === 0) this.markChunkDirty(cx, cy - 1, cz);
-    else if (ly === m) this.markChunkDirty(cx, cy + 1, cz);
-    if (lz === 0) this.markChunkDirty(cx, cy, cz - 1);
-    else if (lz === m) this.markChunkDirty(cx, cy, cz + 1);
+    const cx = toChunk(x);
+    const cz = toChunk(z);
+    const sy = y >> 4;
+    this.markSectionDirty(cx, sy, cz);
+    const lx = toLocal(x);
+    const lz = toLocal(z);
+    const ly = y & 15;
+    if (lx === 0) this.markSectionDirty(cx - 1, sy, cz);
+    else if (lx === 15) this.markSectionDirty(cx + 1, sy, cz);
+    if (lz === 0) this.markSectionDirty(cx, sy, cz - 1);
+    else if (lz === 15) this.markSectionDirty(cx, sy, cz + 1);
+    if (ly === 0) this.markSectionDirty(cx, sy - 1, cz);
+    else if (ly === 15) this.markSectionDirty(cx, sy + 1, cz);
   }
 
   /**
-   * A column's light height moved from `oldH` to `newH`: every face that looks
-   * into a cell between them changed brightness. Dirty the chunks spanning that
+   * A column's light height moved from `oldH` to `newH`: faces looking into
+   * cells between them changed brightness. Dirty the sections spanning that
    * range in this column and its four neighbours.
    */
   private markLightDirty(x: number, z: number, oldH: number, newH: number): void {
     const lo = Math.max(0, Math.min(oldH, newH));
-    const hi = Math.min(this.sy - 1, Math.max(oldH, newH) + 1);
-    const cyLo = lo >> CHUNK_SHIFT;
-    const cyHi = hi >> CHUNK_SHIFT;
+    const hi = Math.min(CHUNK_HEIGHT - 1, Math.max(oldH, newH) + 1);
     const cols: ReadonlyArray<readonly [number, number]> = [
       [x, z],
       [x + 1, z],
@@ -178,9 +296,8 @@ export class World {
       [x, z + 1],
       [x, z - 1],
     ];
-    for (const [cx0, cz0] of cols) {
-      if (cx0 < 0 || cz0 < 0 || cx0 >= this.sx || cz0 >= this.sz) continue;
-      for (let cy = cyLo; cy <= cyHi; cy++) this.markChunkDirty(cx0 >> CHUNK_SHIFT, cy, cz0 >> CHUNK_SHIFT);
+    for (const [px, pz] of cols) {
+      for (let sy = lo >> 4; sy <= hi >> 4; sy++) this.markSectionDirty(toChunk(px), sy, toChunk(pz));
     }
   }
 }

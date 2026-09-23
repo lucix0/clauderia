@@ -91,6 +91,24 @@ export const B = {
 
 export const BLOCK_COUNT = 48;
 
+/**
+ * Stored block values are 16-bit: the low byte is the block id, the high byte
+ * a per-block state (fluid level, orientation…). Lookup tables use the id.
+ */
+export const ID_MASK = 0xff;
+
+export function idOf(value: number): number {
+  return value & ID_MASK;
+}
+
+export function stateOf(value: number): number {
+  return value >> 8;
+}
+
+export function withState(id: number, state: number): number {
+  return (id & ID_MASK) | ((state & 0xff) << 8);
+}
+
 export type Shape = 'none' | 'cube' | 'cross' | 'slab';
 export type RenderPass = 'opaque' | 'cutout' | 'translucent';
 

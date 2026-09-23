@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { raycast } from '../src/player/raycast';
 import { B } from '../src/world/blocks';
-import { World } from '../src/world/world';
+import type { World } from '../src/world/world';
+import { classicWorld } from './helpers';
 
 function world(): World {
-  const w = new World(16, 16, 16, 0);
+  const w = classicWorld(16, 16, 16);
   w.setBlock(8, 5, 8, B.STONE);
   return w;
 }
@@ -48,7 +49,7 @@ describe('voxel DDA raycast', () => {
   });
 
   it('hits the top of a slab at half height and misses above it', () => {
-    const w = new World(16, 16, 16, 0);
+    const w = classicWorld(16, 16, 16);
     w.setBlock(4, 4, 4, B.SLAB);
     const down = raycast(w, 4.5, 8, 4.5, 0, -1, 0, 10)!;
     expect(down.face).toBe(2);

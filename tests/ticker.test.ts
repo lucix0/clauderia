@@ -1,13 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { B } from '../src/world/blocks';
 import { MAX_UPDATES_PER_TICK, Ticker } from '../src/world/ticker';
-import { World } from '../src/world/world';
+import type { World } from '../src/world/world';
+import { classicWorld } from './helpers';
 
 /** 32×32×32 world with a stone floor at y = 4 (top surface at y = 5). */
 function setup(): { w: World; t: Ticker } {
-  const w = new World(32, 32, 32, 7);
-  for (let z = 0; z < 32; z++) for (let x = 0; x < 32; x++) for (let y = 0; y <= 4; y++) w.blocks[w.index(x, y, z)] = B.STONE;
-  w.heightMap.recomputeAll(w.blocks);
+  const w = classicWorld(32, 32, 32, (_x, y) => (y <= 4 ? B.STONE : B.AIR), 7);
   return { w, t: new Ticker(w) };
 }
 
@@ -17,7 +16,7 @@ function run(t: Ticker, ticks: number): void {
 
 function count(w: World, id: number): number {
   let n = 0;
-  for (const b of w.blocks) if (b === id) n++;
+  for (const c of w.chunks.values()) for (const b of c.blocks) if ((b & 0xff) === id) n++;
   return n;
 }
 
@@ -75,9 +74,7 @@ describe('liquids', () => {
   });
 
   it('caps the number of updates per tick', () => {
-    const w = new World(128, 16, 128, 1);
-    for (let z = 0; z < 128; z++) for (let x = 0; x < 128; x++) w.blocks[w.index(x, 0, z)] = B.STONE;
-    w.heightMap.recomputeAll(w.blocks);
+    const w = classicWorld(128, 16, 128, (_x, y) => (y === 0 ? B.STONE : B.AIR), 1);
     const t = new Ticker(w);
     for (let z = 0; z < 128; z += 4) for (let x = 0; x < 128; x += 4) w.setBlock(x, 1, z, B.WATER);
     let peak = 0;
@@ -102,10 +99,9 @@ describe('liquids', () => {
   });
 
   it('lets the edge ocean pour into holes dug at the map border', () => {
-    const w = new World(16, 16, 16, 3);
-    const sea = w.seaLevel; // 8; outside water fills y 6..7
-    for (let z = 0; z < 16; z++) for (let x = 0; x < 16; x++) for (let y = 0; y < sea + 2; y++) w.blocks[w.index(x, y, z)] = B.STONE;
-    w.heightMap.recomputeAll(w.blocks);
+    const sea = 8; // outside water fills y 6..7
+    const w = classicWorld(16, 16, 16, (_x, y) => (y < sea + 2 ? B.STONE : B.AIR), 3);
+    expect(w.seaLevel).toBe(sea);
     const t = new Ticker(w);
     w.setBlock(0, sea - 1, 5, B.AIR);
     w.setBlock(1, sea - 1, 5, B.AIR);
@@ -117,9 +113,8 @@ describe('liquids', () => {
 
 describe('sponges', () => {
   it('clears water within 2 blocks and keeps it out until removed', () => {
-    const { w, t } = setup();
-    for (let z = 0; z < 32; z++) for (let x = 0; x < 32; x++) for (let y = 5; y < 8; y++) w.blocks[w.index(x, y, z)] = B.WATER;
-    w.heightMap.recomputeAll(w.blocks);
+    const w = classicWorld(32, 32, 32, (_x, y) => (y <= 4 ? B.STONE : y < 8 ? B.WATER : B.AIR), 7);
+    const t = new Ticker(w);
     w.setBlock(16, 6, 16, B.SPONGE);
     run(t, 100);
     for (let dy = -1; dy <= 1; dy++)

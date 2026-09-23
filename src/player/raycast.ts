@@ -21,7 +21,8 @@ export interface RayHit {
 }
 
 export interface BlockSource {
-  get(x: number, y: number, z: number): number;
+  /** Block id (not the full value) at a cell. */
+  getId(x: number, y: number, z: number): number;
   inBounds(x: number, y: number, z: number): boolean;
 }
 
@@ -116,7 +117,7 @@ export function raycast(
   let face = -1;
   while (t <= maxDist) {
     if (world.inBounds(x, y, z)) {
-      const id = world.get(x, y, z);
+      const id = world.getId(x, y, z);
       if (id !== 0 && selectable(id)) {
         const b = blockBounds(id);
         const full = b[0] === 0 && b[1] === 0 && b[2] === 0 && b[3] === 1 && b[4] === 1 && b[5] === 1;

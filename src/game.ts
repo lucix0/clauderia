@@ -2,7 +2,6 @@ import * as THREE from 'three';
 import {
   ACTION_REPEAT_S,
   AUTOSAVE_S,
-  DEBUG_SEED,
   MAX_FRAME_DT,
   PLAYER_EYE,
   REMESH_BUDGET_MS,
@@ -15,13 +14,16 @@ import { bodyOverlapsCell, type CollisionWorld } from './player/physics';
 import { collisionWorld, Player } from './player/player';
 import type { RayHit } from './player/raycast';
 import { createAtlas, type Atlas } from './render/atlas';
-import { ChunkManager } from './render/chunks';
+import { ChunkRenderer } from './render/chunks';
 import { createMaterials } from './render/materials';
 import { BlockOutline } from './render/outline';
 import { Sky, type Medium } from './render/sky';
-import { gunzip, gzip } from './save/compress';
-import { deserializeSave, serializeSave, type SaveData } from './save/serialize';
-import { readSave, writeSave } from './save/storage';
+import { gunzip } from './save/compress';
+import { commitMigration, deleteWorld, getWorld, listWorlds, packChunks, readLegacySave } from './save/db';
+import { migrateV1 } from './save/migrate';
+import { newWorldId, type ClassicSizeName, type PlayerRecord } from './save/records';
+import { deserializeSave } from './save/serialize';
+import { WorldSession } from './session';
 import { DebugOverlay } from './ui/debug';
 import { el } from './ui/dom';
 import { Hud, HOTBAR_SIZE } from './ui/hud';
@@ -30,18 +32,20 @@ import { LoadingScreen } from './ui/loading';
 import { PauseMenu } from './ui/menu';
 import { BlockPicker } from './ui/picker';
 import { loadSettings, sanitizeSettings, saveSettings, type Settings } from './ui/settings';
+import { TitleScreen, type CreateWorldOptions } from './ui/title';
 import { randomSeed, seedFromString } from './util/prng';
 import { B, blockBounds, blockName, DEFAULT_HOTBAR, isValidBlock } from './world/blocks';
-import { generateAsync } from './world/generate';
-import { findSpawn } from './world/generator';
 import { breakBlock, placeBlock, placementTarget, type Cell } from './world/placement';
-import { WORLD_SIZES, type WorldSizeName } from './world/sizes';
-import { Ticker } from './world/ticker';
-import { World } from './world/world';
+import type { World } from './world/world';
 
 const MOUSE_SCALE = 0.0022;
 
-export type GameState = 'loading' | 'title' | 'playing' | 'paused' | 'picker';
+/**
+ * - menu: title screen / world list
+ * - loading: generating or reading a world
+ * - ready: world loaded, waiting for the click that captures the mouse
+ */
+export type GameState = 'menu' | 'loading' | 'ready' | 'playing' | 'paused' | 'picker';
 
 export interface Viewpoint {
   x: number;
@@ -54,7 +58,7 @@ export interface Viewpoint {
 export interface BootOptions {
   /** ?debug: fixed seed, fixed camera, no overlay, no saving. */
   debug: boolean;
-  size: WorldSizeName;
+  size: ClassicSizeName;
 }
 
 /** Owns the renderer, world, player, UI and the fixed-step loop. */
@@ -63,7 +67,7 @@ export class Game {
   readonly scene = new THREE.Scene();
   readonly camera = new THREE.PerspectiveCamera(70, 1, 0.05, 1000);
   readonly atlas: Atlas;
-  readonly chunks: ChunkManager;
+  readonly chunks: ChunkRenderer;
   readonly sky: Sky;
   readonly input: Input;
   readonly player = new Player();
@@ -71,6 +75,7 @@ export class Game {
   readonly picker: BlockPicker;
   readonly menu: PauseMenu;
   readonly loading: LoadingScreen;
+  readonly title: TitleScreen;
   readonly debugOverlay: DebugOverlay;
   readonly icons: IconCache;
   readonly outline = new BlockOutline();
@@ -82,9 +87,9 @@ export class Game {
   debugMode = false;
   /** Called after a world finishes loading and the first frame is drawn. */
   onWorldReady: () => void = () => {};
+  session: WorldSession | null = null;
   private world: World | null = null;
   private collision: CollisionWorld | null = null;
-  private ticker: Ticker | null = null;
   private stepCount = 0;
   private accumulator = 0;
   private lastTime = 0;
@@ -93,7 +98,6 @@ export class Game {
   private readonly titleOverlay: HTMLElement;
   private frameResolvers: Array<() => void> = [];
   private autosaveTimer = 0;
-  private saving = false;
   private busy = false;
   // Debug counters.
   private fpsFrames = 0;
@@ -112,7 +116,7 @@ export class Game {
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
     this.camera.rotation.order = 'YXZ';
     this.atlas = createAtlas();
-    this.chunks = new ChunkManager(createMaterials(this.atlas.texture));
+    this.chunks = new ChunkRenderer(createMaterials(this.atlas.texture));
     this.scene.add(this.chunks.group);
     this.scene.add(this.outline.object);
     this.sky = new Sky(this.scene, this.atlas);
@@ -148,15 +152,19 @@ export class Game {
     this.menu = new PauseMenu(ui, {
       resume: () => this.resume(),
       save: () => void this.saveNow('manual'),
-      load: () => void this.loadSaved(true),
-      newWorld: (size, seedText) => {
-        const seed = seedText.trim() === '' ? randomSeed() : seedFromString(seedText);
-        void this.newWorld(size, seed);
-      },
+      quit: () => void this.quitToTitle(),
       settingsChanged: (s) => this.applySettings(s),
     });
     this.menu.setSettings(this.settings);
-    this.menu.setCanLoad(false);
+    this.title = new TitleScreen(
+      ui,
+      {
+        play: (id) => void this.playWorld(id),
+        create: (opts) => void this.createWorld(opts),
+        remove: (id) => void this.removeWorld(id),
+      },
+      { types: ['classic'], modes: ['creative'], difficulties: ['normal'] },
+    );
     this.loading = new LoadingScreen(ui);
 
     canvas.addEventListener('click', () => {
@@ -172,9 +180,10 @@ export class Game {
       onLockChange: (locked) => this.onLockChange(locked),
     };
     window.addEventListener('resize', () => this.resize());
-    window.addEventListener('beforeunload', () => {
-      // Best effort: kick off a save if the page is closed mid-game.
-      if (this.state === 'playing') void this.saveNow('autosave');
+    // Best effort: flush when the tab is hidden or closed.
+    window.addEventListener('pagehide', () => void this.saveNow('autosave'));
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'hidden') void this.saveNow('autosave');
     });
     this.applySettings(this.settings);
     this.resize();
@@ -190,93 +199,126 @@ export class Game {
 
   // ---- World lifecycle ----
 
-  /** Load the last save, or generate a new world. */
+  /** Start the loop, then show the world list (or jump into ?debug). */
   async boot(opts: BootOptions): Promise<void> {
     this.debugMode = opts.debug;
     this.start();
-    if (!opts.debug) {
-      const hasSave = await this.hasSave();
-      this.menu.setCanLoad(hasSave);
-      if (hasSave && (await this.loadSaved(false))) return;
+    if (opts.debug) {
+      await this.openSession(() => WorldSession.openDebug(opts.size, (st, f) => this.loading.set(st, f)));
+      return;
     }
-    await this.newWorld(opts.size, opts.debug ? DEBUG_SEED : randomSeed());
+    await this.migrateLegacySave();
+    await this.showTitleScreen();
   }
 
-  async newWorld(size: WorldSizeName, seed: number): Promise<void> {
+  /** Title screen with the stored worlds. */
+  async showTitleScreen(status = ''): Promise<void> {
+    this.state = 'menu';
+    this.input.exitLock();
+    this.menu.close();
+    this.picker.close();
+    this.titleOverlay.classList.add('hidden');
+    this.hud.setVisible(false);
+    this.loading.close();
+    let worlds: Awaited<ReturnType<typeof listWorlds>> = [];
+    try {
+      worlds = await listWorlds();
+    } catch (err) {
+      console.warn('Could not list worlds:', err);
+      status = 'Saving is unavailable in this browser; worlds will not be kept.';
+    }
+    this.title.open(worlds);
+    this.title.setStatus(status, status ? 'error' : 'info');
+  }
+
+  async createWorld(opts: CreateWorldOptions): Promise<void> {
+    const seed = opts.seedText.trim() === '' ? randomSeed() : seedFromString(opts.seedText);
+    const record = WorldSession.newRecord({ ...opts, seed });
+    await this.openSession(() => WorldSession.openClassic(record, true, (st, f) => this.loading.set(st, f)));
+  }
+
+  async playWorld(id: string): Promise<void> {
+    const record = await getWorld(id);
+    if (!record) {
+      await this.showTitleScreen('That world could not be read.');
+      return;
+    }
+    record.lastPlayed = Date.now();
+    await this.openSession(() => WorldSession.openClassic(record, true, (st, f) => this.loading.set(st, f)));
+  }
+
+  async removeWorld(id: string): Promise<void> {
+    try {
+      await deleteWorld(id);
+      await this.showTitleScreen();
+    } catch (err) {
+      console.warn('Delete failed:', err);
+      this.title.setStatus(`Could not delete: ${err instanceof Error ? err.message : String(err)}`, 'error');
+    }
+  }
+
+  async quitToTitle(): Promise<void> {
+    await this.saveNow('autosave');
+    this.closeSession();
+    await this.showTitleScreen();
+  }
+
+  /** Convert a v1 single-slot save into a Classic world, once. */
+  private async migrateLegacySave(): Promise<void> {
+    try {
+      const legacy = await readLegacySave();
+      if (!legacy) return;
+      this.enterLoading('Upgrading your saved world…');
+      this.loading.set('Converting save', 0.2);
+      const data = deserializeSave(await gunzip(new Uint8Array(legacy)));
+      await new Promise((r) => setTimeout(r, 0));
+      const migrated = migrateV1(data, newWorldId(), Date.now());
+      this.loading.set('Writing chunks', 0.8);
+      await commitMigration(migrated.world, await packChunks(migrated.world.id, migrated.chunks));
+    } catch (err) {
+      console.warn('Could not migrate the old save:', err);
+    }
+  }
+
+  /** Load a world behind the loading screen, then wait for the click to play. */
+  private async openSession(open: () => Promise<WorldSession>): Promise<void> {
     if (this.busy) return;
     this.busy = true;
     try {
-      const dims = WORLD_SIZES[size];
-      this.enterLoading('Generating level…');
-      const blocks = await generateAsync({ sx: dims.sx, sy: dims.sy, sz: dims.sz, seed }, (stage, f) =>
-        this.loading.set(stage, f * 0.8),
-      );
-      const world = new World(dims.sx, dims.sy, dims.sz, seed, blocks);
-      await this.installWorld(world);
-      const spawn = findSpawn(world.blocks, world.sx, world.sy, world.sz);
-      this.player.setSpawn(spawn.x, spawn.y, spawn.z);
-      this.player.respawn();
-      this.player.body.flying = false;
-      this.player.yaw = 0;
-      this.player.pitch = 0;
+      this.title.close();
+      this.enterLoading(this.debugMode ? 'Generating level…' : 'Loading world…');
+      this.closeSession();
+      const session = await open();
+      await this.installSession(session);
       await this.finishLoading();
-      if (!this.debugMode) await this.saveNow('autosave');
+      if (session.persistent && !session.record.player) await this.saveNow('autosave');
     } catch (err) {
       console.error(err);
-      this.loading.set(`Could not generate the level: ${err instanceof Error ? err.message : String(err)}`, 0);
+      await this.showTitleScreen(`Could not open the world: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       this.busy = false;
     }
   }
 
-  /** Load the save slot. Returns false when there is none or it is unreadable. */
-  async loadSaved(fromMenu: boolean): Promise<boolean> {
-    if (this.busy) return false;
-    this.busy = true;
-    try {
-      const stored = await readSave();
-      if (!stored) {
-        if (fromMenu) this.menu.setStatus('No saved world yet.', 'error');
-        return false;
-      }
-      this.enterLoading('Loading level…');
-      this.loading.set('Reading save', 0.1);
-      const data = deserializeSave(await gunzip(new Uint8Array(stored.data)));
-      const { sx, sy, sz, seed, blocks } = data.world;
-      const world = new World(sx, sy, sz, seed, blocks);
-      await this.installWorld(world);
-      const p = data.player;
-      this.player.setSpawn(p.spawnX, p.spawnY, p.spawnZ);
-      this.player.setState({ x: p.x, y: p.y, z: p.z, yaw: p.yaw, pitch: p.pitch, flying: p.flying });
-      this.setHotbar(data.hotbar, data.selected);
-      await this.finishLoading();
-      return true;
-    } catch (err) {
-      console.warn('Could not load save:', err);
-      if (fromMenu) {
-        this.loading.close();
-        this.pause();
-        this.menu.setStatus(`Could not load: ${err instanceof Error ? err.message : String(err)}`, 'error');
-      }
-      return false;
-    } finally {
-      this.busy = false;
-    }
+  private closeSession(): void {
+    this.session?.dispose();
+    this.session = null;
+    this.world = null;
+    this.collision = null;
+    this.target = null;
+    this.outline.set(null);
+    this.chunks.disposeAll();
   }
 
   async saveNow(reason: 'manual' | 'autosave'): Promise<boolean> {
-    const world = this.world;
-    if (this.debugMode) {
+    const session = this.session;
+    if (!session || !session.persistent) {
       if (reason === 'manual') this.menu.setStatus('Saving is off in ?debug mode.', 'error');
       return false;
     }
-    if (!world || this.saving || this.state === 'loading') return false;
-    this.saving = true;
+    if (this.state === 'loading') return false;
     try {
-      const raw = serializeSave(this.collectSave(world));
-      const packed = await gzip(raw);
-      await writeSave({ data: packed.buffer, savedAt: Date.now(), label: `${world.sx}×${world.sz} seed ${world.seed}` });
-      this.menu.setCanLoad(true);
+      await session.save(this.playerRecord());
       const time = new Date().toLocaleTimeString();
       this.menu.setStatus(reason === 'manual' ? `Saved at ${time}.` : `Autosaved at ${time}.`, 'ok');
       this.autosaveTimer = 0;
@@ -285,32 +327,12 @@ export class Game {
       console.warn('Save failed:', err);
       this.menu.setStatus(`Save failed: ${err instanceof Error ? err.message : String(err)}`, 'error');
       return false;
-    } finally {
-      this.saving = false;
     }
   }
 
-  private async hasSave(): Promise<boolean> {
-    try {
-      return (await readSave()) !== null;
-    } catch {
-      return false;
-    }
-  }
-
-  private collectSave(world: World): SaveData {
+  private playerRecord(): PlayerRecord {
     const s = this.player.getState();
-    return {
-      world: { sx: world.sx, sy: world.sy, sz: world.sz, seed: world.seed, blocks: world.blocks },
-      player: {
-        ...s,
-        spawnX: this.player.spawn.x,
-        spawnY: this.player.spawn.y,
-        spawnZ: this.player.spawn.z,
-      },
-      hotbar: [...this.hotbar],
-      selected: this.selected,
-    };
+    return { ...s, hotbar: [...this.hotbar], selected: this.selected };
   }
 
   private enterLoading(heading: string): void {
@@ -318,16 +340,17 @@ export class Game {
     this.input.exitLock();
     this.menu.close();
     this.picker.close();
+    this.title.close();
     this.titleOverlay.classList.add('hidden');
     this.hud.setVisible(false);
     this.loading.open(heading);
   }
 
-  private async installWorld(world: World): Promise<void> {
-    this.ticker?.dispose();
+  private async installSession(session: WorldSession): Promise<void> {
+    const world = session.world;
+    this.session = session;
     this.world = world;
     this.collision = collisionWorld(world);
-    this.ticker = new Ticker(world);
     this.stepCount = 0;
     this.target = null;
     this.outline.set(null);
@@ -335,7 +358,22 @@ export class Game {
     this.chunks.setWorld(world);
     this.loading.set('Building terrain', 0.8);
     await this.chunks.buildAll((done, total) => this.loading.set('Building terrain', 0.8 + (0.2 * done) / total));
-    this.menu.setInfo(`World ${world.sx}×${world.sz} · seed ${world.seed}`);
+    const spawn = session.spawn;
+    this.player.setSpawn(spawn.x, spawn.y, spawn.z);
+    const p = session.record.player;
+    if (p) {
+      this.player.setState(p);
+      this.setHotbar(p.hotbar, p.selected);
+    } else {
+      this.player.respawn();
+      this.player.body.flying = false;
+      this.player.yaw = 0;
+      this.player.pitch = 0;
+      this.setHotbar(DEFAULT_HOTBAR, 0);
+    }
+    this.menu.setCanSave(session.persistent);
+    this.menu.setStatus('');
+    this.menu.setInfo(`${session.record.name} · seed ${world.seed}`);
   }
 
   private async finishLoading(): Promise<void> {
@@ -345,7 +383,7 @@ export class Game {
       this.setViewpoint(debugViewpoint(this.world!));
       this.enterPlayUnlocked();
     } else {
-      this.showTitle();
+      this.showReady();
     }
     await this.nextFrame();
     this.onWorldReady();
@@ -361,8 +399,9 @@ export class Game {
     this.player.body.flying = true;
   }
 
-  showTitle(): void {
-    this.state = 'title';
+  /** World loaded: show "Click to play". */
+  showReady(): void {
+    this.state = 'ready';
     this.menu.close();
     this.titleOverlay.classList.remove('hidden');
     this.hud.setVisible(false);
@@ -378,13 +417,13 @@ export class Game {
   }
 
   resume(): void {
-    if (this.state === 'loading') return;
+    if (this.state === 'loading' || this.state === 'menu' || !this.world) return;
     this.picker.close();
     void this.input.requestLock().then((ok) => {
       if (!ok && !this.input.locked) {
         // The browser refused (e.g. too soon after Esc): ask for another click.
         if (this.state === 'picker') this.picker.close();
-        this.showTitle();
+        this.showReady();
       }
     });
   }
@@ -474,6 +513,10 @@ export class Game {
     }
     if (this.state === 'paused') {
       if (code === 'Escape') this.menu.back();
+      return;
+    }
+    if (this.state === 'menu') {
+      if (code === 'Escape') this.title.back();
       return;
     }
     if (this.state !== 'playing') return;
@@ -656,7 +699,7 @@ export class Game {
     if (this.player.body.y < -32) this.player.respawn();
     // Block behaviours tick at 20 Hz on the same fixed clock.
     this.stepCount++;
-    if (this.ticker && this.stepCount % STEPS_PER_TICK === 0) this.ticker.step();
+    if (this.session && this.stepCount % STEPS_PER_TICK === 0) this.session.ticker.step();
   }
 
   private cameraMedium(): Medium {
@@ -702,10 +745,12 @@ export class Game {
       pendingChunks: this.chunks.pending,
       drawCalls: info.calls,
       triangles: info.triangles,
-      world: w ? `${w.sx}×${w.sy}×${w.sz} seed ${w.seed}` : '—',
+      world: w
+        ? `${w.type}${w.bounds ? ` ${w.bounds.sx}×${w.bounds.sz}` : ''} seed ${w.seed} · ${w.chunks.size} chunks`
+        : '—',
       mode: `${b.flying ? 'flying' : b.liquid === 1 ? 'swimming' : b.liquid === 2 ? 'in lava' : 'walking'}${b.onGround ? ', on ground' : ''} · view ${RENDER_DISTANCES[this.settings.renderDistance]!.name}`,
-      tick: this.ticker
-        ? `#${this.ticker.tick}  ${this.ticker.lastUpdates} updates/tick  ${this.ticker.pending} queued`
+      tick: this.session
+        ? `#${this.session.ticker.tick}  ${this.session.ticker.lastUpdates} updates/tick  ${this.session.ticker.pending} queued`
         : '—',
     });
   }
@@ -721,10 +766,12 @@ export class Game {
 
 /** Fixed camera for the ?debug screenshot: looking across the map centre. */
 export function debugViewpoint(world: World): Viewpoint {
-  const x = world.sx * 0.5 - 40;
-  const z = world.sz * 0.5 + 44;
+  const cx = world.bounds ? world.bounds.sx * 0.5 : 0;
+  const cz = world.bounds ? world.bounds.sz * 0.5 : 0;
+  const x = cx - 40;
+  const z = cz + 44;
   const y = world.seaLevel + 22;
-  const tx = world.sx * 0.5 + 8;
-  const tz = world.sz * 0.5 - 16;
+  const tx = cx + 8;
+  const tz = cz - 16;
   return { x, y, z, yaw: Math.atan2(-(tx - x), -(tz - z)), pitch: -0.32 };
 }

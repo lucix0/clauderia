@@ -1,11 +1,13 @@
-// Playwright smoke test: serves the production build, opens it with ?debug,
-// fails on any console error, exercises a few interactions, checks that a
-// save survives a reload, and writes screenshots to artifacts/.
+// Playwright smoke test: serves the production build, fails on any console
+// error, and writes screenshots to artifacts/. Phases: the ?debug world view
+// and interactions; title screen create / save / reload / delete; v1 save
+// migration.
 //
 //   npm run smoke            (builds first)
 //   CHROMIUM_PATH=/path/to/chrome node scripts/smoke.mjs
 import { mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { gzipSync } from 'node:zlib';
 import { chromium } from 'playwright';
 import { preview } from 'vite';
 
@@ -25,6 +27,53 @@ let failed = false;
 function check(ok, label, detail = '') {
   console.log(`${ok ? 'ok  ' : 'FAIL'} ${label}${detail ? ` — ${detail}` : ''}`);
   if (!ok) failed = true;
+}
+
+/** A v1 save (flat Small world with a marker block), gzipped, as a byte array. */
+function legacySave() {
+  const sx = 128;
+  const sy = 64;
+  const sz = 128;
+  const blocks = new Uint8Array(sx * sy * sz);
+  for (let y = 0; y < 32; y++) blocks.fill(y === 0 ? 7 : y < 31 ? 1 : 2, y * sx * sz, (y + 1) * sx * sz);
+  blocks[(40 * sz + 20) * sx + 30] = 41;
+  const hotbar = [1, 4, 43, 3, 5, 15, 16, 18, 42];
+  const buf = new ArrayBuffer(4 + 2 + 6 + 4 + 32 + 3 + hotbar.length + 4 + blocks.length);
+  const v = new DataView(buf);
+  let o = 0;
+  v.setUint32(o, 0x544b4c42, true);
+  o += 4;
+  v.setUint16(o, 1, true);
+  o += 2;
+  for (const n of [sx, sy, sz]) {
+    v.setUint16(o, n, true);
+    o += 2;
+  }
+  v.setUint32(o, 4242, true);
+  o += 4;
+  for (const f of [30.5, 41, 18.5, 0.5, -0.2, 64.5, 32, 64.5]) {
+    v.setFloat32(o, f, true);
+    o += 4;
+  }
+  v.setUint8(o++, 0);
+  v.setUint8(o++, 3);
+  v.setUint8(o++, hotbar.length);
+  for (const id of hotbar) v.setUint8(o++, id);
+  v.setUint32(o, blocks.length, true);
+  o += 4;
+  new Uint8Array(buf).set(blocks, o);
+  return Array.from(gzipSync(Buffer.from(buf)));
+}
+
+async function openTitle(url) {
+  const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+  page.on('console', (msg) => {
+    if (msg.type() === 'error') problems.push(`console.error: ${msg.text()}`);
+  });
+  page.on('pageerror', (err) => problems.push(`page error: ${err.message}`));
+  await page.goto(url);
+  await page.waitForSelector('.title-screen:not(.hidden)', { timeout: 60_000 });
+  return page;
 }
 
 async function openPage(url) {
@@ -93,8 +142,9 @@ try {
   const fog = await page.evaluate(async () => {
     const g = window.__game;
     const w = g.currentWorld;
-    for (let x = 1; x < w.sx - 1; x += 3) {
-      for (let z = 1; z < w.sz - 1; z += 3) {
+    const b = w.bounds ?? { sx: 64, sz: 64 };
+    for (let x = 1; x < b.sx - 1; x += 3) {
+      for (let z = 1; z < b.sz - 1; z += 3) {
         if (w.get(x, w.seaLevel - 1, z) === 8 && w.get(x, w.seaLevel - 3, z) === 8) {
           g.setViewpoint({ x: x + 0.5, y: w.seaLevel - 1.5, z: z + 0.5, yaw: 0, pitch: 0 });
           await new Promise((r) => setTimeout(r, 300));
@@ -104,7 +154,7 @@ try {
     }
     return { found: false };
   });
-  check(!fog.found || fog.far < 20, 'dense fog under water', JSON.stringify(fog));
+  check(fog.found && fog.far < 20, 'dense fog under water', JSON.stringify(fog));
   await page.screenshot({ path: `${OUT}/smoke-underwater.png` });
 
   // Block picker renders an icon per block.
@@ -115,16 +165,61 @@ try {
   await page.screenshot({ path: `${OUT}/smoke-picker.png` });
   await page.close();
 
-  // ---- 2. Save survives a reload (normal mode, small world) ----
-  const game = await openPage(`${base}?size=small`);
-  await game.waitForSelector('.click-to-play:not(.hidden)', { timeout: 60_000 });
-  const before = await game.textContent('.menu-info');
-  await game.waitForTimeout(500);
-  await game.reload();
-  await game.waitForFunction(() => window.__ready === true, null, { timeout: 120_000 });
-  const after = await game.textContent('.menu-info');
-  check(Boolean(before) && before === after, 'world is restored from IndexedDB after reload', `${before} → ${after}`);
+  // ---- 2. Title screen: create, edit, save & quit, reopen, delete ----
+  const game = await openTitle(`${base}?api`);
   await game.screenshot({ path: `${OUT}/smoke-title.png` });
+  await game.click('text=Create new world');
+  await game.fill('#cw-name', 'Smoke world');
+  await game.fill('#cw-seed', 'smoke');
+  if (await game.locator('#cw-type').isVisible()) await game.selectOption('#cw-type', 'classic');
+  await game.selectOption('#cw-size', 'small');
+  await game.click('button:visible:has-text("Create")');
+  await game.waitForFunction(() => window.__ready === true, null, { timeout: 120_000 });
+  await game.waitForSelector('.click-to-play:not(.hidden)');
+  const marker = await game.evaluate(async () => {
+    const g = window.__game;
+    g.enterPlayUnlocked();
+    const s = g.player.spawn;
+    const x = Math.floor(s.x) + 3;
+    const z = Math.floor(s.z) - 2;
+    g.currentWorld.setBlock(x, 50, z, 39); // gold block in the sky
+    await g.quitToTitle();
+    return { x, z };
+  });
+  await game.waitForSelector('.title-screen:not(.hidden)');
+  await game.reload();
+  await game.waitForSelector('.title-screen:not(.hidden)');
+  check((await game.locator('.world-row').count()) === 1, 'world list shows the saved world');
+  await game.click('.world-row >> text=Play');
+  await game.waitForFunction(() => window.__ready === true, null, { timeout: 120_000 });
+  const kept = await game.evaluate(({ x, z }) => window.__game.currentWorld.get(x, 50, z), marker);
+  check(kept === 39, 'edits survive save & quit and a page reload', `block ${kept}`);
+  await game.evaluate(() => window.__game.quitToTitle());
+  await game.waitForSelector('.title-screen:not(.hidden)');
+  await game.click('.world-row >> text=Delete');
+  await game.click('button:visible:has-text("Delete")');
+  await game.waitForTimeout(400);
+  check((await game.locator('.world-row').count()) === 0, 'delete (with confirmation) removes the world');
+
+  // ---- 3. A v1 single-slot save is migrated into a Classic world ----
+  await game.evaluate(async (bytes) => {
+    const db = await new Promise((res) => {
+      const q = indexedDB.open('blocktide');
+      q.onsuccess = () => res(q.result);
+    });
+    const tx = db.transaction('saves', 'readwrite');
+    tx.objectStore('saves').put({ data: new Uint8Array(bytes).buffer, savedAt: 1, label: 'v1' }, 'latest');
+    await new Promise((r) => {
+      tx.oncomplete = r;
+    });
+    db.close();
+  }, legacySave());
+  await game.reload();
+  await game.waitForSelector('.title-screen:not(.hidden)', { timeout: 60_000 });
+  await game.click('.world-row >> text=Play');
+  await game.waitForFunction(() => window.__ready === true, null, { timeout: 120_000 });
+  const migrated = await game.evaluate(() => window.__game.currentWorld.get(30, 40, 20));
+  check(migrated === 41, 'v1 save migrates into a playable Classic world', `marker ${migrated}`);
   await game.close();
 } catch (err) {
   check(false, 'smoke run threw', err instanceof Error ? err.message : String(err));

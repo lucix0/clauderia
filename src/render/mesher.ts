@@ -1,9 +1,9 @@
 /**
- * Pure chunk mesher: turns the blocks of one chunk into per-pass quad lists
- * with baked Classic lighting. No three.js / DOM, so it is unit-testable.
+ * Pure section mesher: turns one padded 16³ section into per-pass quad lists
+ * with baked lighting. No three.js / DOM, so it is unit-testable and runs in
+ * workers.
  */
 import {
-  CHUNK_SIZE,
   SHADE_BOTTOM,
   SHADE_TOP,
   SHADE_X,
@@ -24,16 +24,15 @@ import {
   SHAPE_NONE,
   SHAPE_SLAB,
 } from '../world/blocks';
-import type { World } from '../world/world';
+import { PAD, padIndex, type PaddedSection } from './padded';
 
 export interface PassMesh {
-  /** xyz per vertex, world coordinates. */
+  /** xyz per vertex, local to the chunk column. */
   readonly positions: Float32Array;
   /** uv per vertex, atlas coordinates. */
   readonly uvs: Float32Array;
   /** rgb per vertex, 0–255 in linear space (brightness only). */
   readonly colors: Uint8Array;
-  readonly indices: Uint16Array | Uint32Array;
   readonly quads: number;
 }
 
@@ -52,9 +51,9 @@ export const FACE_DIRS: ReadonlyArray<readonly [number, number, number]> = [
   [0, 0, -1],
 ];
 
-const DIR_X = Int8Array.from(FACE_DIRS, (d) => d[0]);
-const DIR_Y = Int8Array.from(FACE_DIRS, (d) => d[1]);
-const DIR_Z = Int8Array.from(FACE_DIRS, (d) => d[2]);
+const PAD_LAYER = PAD * PAD;
+/** Padded-array offset to the neighbour through each face. */
+const PAD_OFFSETS = [1, -1, PAD_LAYER, -PAD_LAYER, PAD, -PAD];
 
 /** Four corners per face, counter-clockwise seen from outside; uv (0,0),(1,0),(1,1),(0,1). */
 const FACE_VERTS: ReadonlyArray<readonly number[]> = [
@@ -129,21 +128,10 @@ class QuadBuffer {
   finish(): PassMesh | null {
     const q = this.quads;
     if (q === 0) return null;
-    const vertCount = q * 4;
-    const indices = vertCount <= 65535 ? new Uint16Array(q * 6) : new Uint32Array(q * 6);
-    for (let i = 0, v = 0, k = 0; i < q; i++, v += 4, k += 6) {
-      indices[k] = v;
-      indices[k + 1] = v + 1;
-      indices[k + 2] = v + 2;
-      indices[k + 3] = v;
-      indices[k + 4] = v + 2;
-      indices[k + 5] = v + 3;
-    }
     return {
       positions: this.pos.slice(0, q * 12),
       uvs: this.uv.slice(0, q * 8),
       colors: this.col.slice(0, q * 12),
-      indices,
       quads: q,
     };
   }
@@ -247,51 +235,44 @@ export function faceVisible(id: number, shape: number, nb: number, face: number)
   return true;
 }
 
-/** Build the meshes for chunk (cx, cy, cz). */
-export function meshChunk(world: World, cx: number, cy: number, cz: number): ChunkMeshData {
-  const { sx, sy, sz, blocks } = world;
-  const heights = world.heightMap.heights;
-  const layer = sx * sz;
-  const x0 = cx * CHUNK_SIZE;
-  const y0 = cy * CHUNK_SIZE;
-  const z0 = cz * CHUNK_SIZE;
-  const x1 = Math.min(x0 + CHUNK_SIZE, sx);
-  const y1 = Math.min(y0 + CHUNK_SIZE, sy);
-  const z1 = Math.min(z0 + CHUNK_SIZE, sz);
-  const offsets = [1, -1, layer, -layer, sx, -sx];
+/**
+ * Build the meshes of one 16³ section from its padded neighbourhood.
+ * Positions are local to the chunk column: x, z in 0..16, y in 0..128.
+ */
+export function meshSection(pad: PaddedSection): ChunkMeshData {
+  const blocks = pad.blocks;
+  const light = pad.light;
+  const y0 = pad.sy * 16;
 
   for (const b of buffers) b.reset();
 
-  for (let y = y0; y < y1; y++) {
-    const yInterior = y > 0 && y < sy - 1;
-    for (let z = z0; z < z1; z++) {
-      const zInterior = yInterior && z > 0 && z < sz - 1;
-      let i = (y * sz + z) * sx + x0;
-      for (let x = x0; x < x1; x++, i++) {
-        const id = blocks[i]!;
+  for (let ly = 0; ly < 16; ly++) {
+    const y = y0 + ly;
+    for (let z = 0; z < 16; z++) {
+      let i = padIndex(0, ly, z);
+      for (let x = 0; x < 16; x++, i++) {
+        const value = blocks[i]!;
+        const id = value & 0xff;
         if (id === B.AIR) continue;
         const shape = SHAPE[id]!;
         if (shape === SHAPE_NONE) continue;
-        const interior = zInterior && x > 0 && x < sx - 1;
-        const occludes = OCCLUDES[id] === 1;
 
         // Fast reject for buried opaque cubes (the vast majority of cells).
         if (
-          occludes &&
-          interior &&
-          OCCLUDES[blocks[i + 1]!] &&
-          OCCLUDES[blocks[i - 1]!] &&
-          OCCLUDES[blocks[i + layer]!] &&
-          OCCLUDES[blocks[i - layer]!] &&
-          OCCLUDES[blocks[i + sx]!] &&
-          OCCLUDES[blocks[i - sx]!]
+          OCCLUDES[id] === 1 &&
+          OCCLUDES[blocks[i + 1]! & 0xff] &&
+          OCCLUDES[blocks[i - 1]! & 0xff] &&
+          OCCLUDES[blocks[i + PAD_LAYER]! & 0xff] &&
+          OCCLUDES[blocks[i - PAD_LAYER]! & 0xff] &&
+          OCCLUDES[blocks[i + PAD]! & 0xff] &&
+          OCCLUDES[blocks[i - PAD]! & 0xff]
         ) {
           continue;
         }
 
         const buf = buffers[PASS[id]!]!;
         if (shape === SHAPE_CROSS) {
-          const lit = y > heights[z * sx + x]!;
+          const lit = light[i]! >> 4 > 0;
           emitCross(buf, x, y, z, FACE_TILES[id * 6 + 2]!, SPRITE_BYTES[lit ? 0 : 1]!);
           continue;
         }
@@ -299,26 +280,11 @@ export function meshChunk(world: World, cx: number, cy: number, cz: number): Chu
         const fullBright = FULL_BRIGHT[id] === 1;
         const slab = shape === SHAPE_SLAB;
         for (let f = 0; f < 6; f++) {
-          const nx = x + DIR_X[f]!;
-          const ny = y + DIR_Y[f]!;
-          const nz = z + DIR_Z[f]!;
-          let nb: number;
-          if (interior) nb = blocks[i + offsets[f]!]!;
-          else if (nx >= 0 && ny >= 0 && nz >= 0 && nx < sx && ny < sy && nz < sz) nb = blocks[i + offsets[f]!]!;
-          else nb = world.getVirtual(nx, ny, nz);
+          const ni = i + PAD_OFFSETS[f]!;
+          const nb = blocks[ni]! & 0xff;
           if (OCCLUDES[nb] && !(slab && f === 2)) continue;
           if (!faceVisible(id, shape, nb, f)) continue;
-
-          let shade: number;
-          if (fullBright) {
-            shade = FULL_BYTE;
-          } else {
-            let lit: boolean;
-            if (ny >= sy || nx < 0 || nz < 0 || nx >= sx || nz >= sz) lit = true;
-            else if (ny < 0) lit = false;
-            else lit = ny > heights[nz * sx + nx]!;
-            shade = FACE_BYTES[lit ? 0 : 1]![f]!;
-          }
+          const shade = fullBright ? FULL_BYTE : FACE_BYTES[light[ni]! >> 4 > 0 ? 0 : 1]![f]!;
           emitFace(buf, f, x, y, z, FACE_TILES[id * 6 + f]!, shade, slab);
         }
       }
@@ -326,6 +292,20 @@ export function meshChunk(world: World, cx: number, cy: number, cz: number): Chu
   }
 
   return [buffers[0]!.finish(), buffers[1]!.finish(), buffers[2]!.finish()];
+}
+
+/** Index buffer for `quads` quads (two triangles each). */
+export function quadIndices(quads: number): Uint16Array | Uint32Array {
+  const indices = quads * 4 <= 65535 ? new Uint16Array(quads * 6) : new Uint32Array(quads * 6);
+  for (let i = 0, v = 0, k = 0; i < quads; i++, v += 4, k += 6) {
+    indices[k] = v;
+    indices[k + 1] = v + 1;
+    indices[k + 2] = v + 2;
+    indices[k + 3] = v;
+    indices[k + 4] = v + 2;
+    indices[k + 5] = v + 3;
+  }
+  return indices;
 }
 
 /** Brightness byte used for a lit top face (exported for tests / sky). */

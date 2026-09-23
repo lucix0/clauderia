@@ -6,17 +6,21 @@ import { raycast, type RayHit } from './raycast';
 
 const PITCH_LIMIT = Math.PI / 2 - 0.001;
 
-/** Adapts the world to what the physics expects: map edges are walls. */
+/**
+ * Adapts the world to what the physics expects: map edges and unloaded chunks
+ * are walls (so nothing ever falls through terrain that isn't there yet).
+ */
 export function collisionWorld(world: World): CollisionWorld {
   return {
     solidHeight(x, y, z) {
-      // The map edges are walls all the way up, and there is a floor below it.
-      if (x < 0 || z < 0 || x >= world.sx || z >= world.sz || y < 0) return 1;
-      if (y >= world.sy) return 0;
-      return collisionHeight(world.blocks[(y * world.sz + z) * world.sx + x]!);
+      if (y < 0 || !world.inColumnBounds(x, z)) return 1;
+      const chunk = world.chunkAt(x, z);
+      if (!chunk) return 1;
+      if (y >= world.height) return 0;
+      return collisionHeight(chunk.blocks[(y << 8) | ((z & 15) << 4) | (x & 15)]! & 0xff);
     },
     liquidAt(x, y, z) {
-      const id = world.getVirtual(x, y, z);
+      const id = world.getVirtual(x, y, z) & 0xff;
       return id === B.WATER ? 1 : id === B.LAVA ? 2 : 0;
     },
   };

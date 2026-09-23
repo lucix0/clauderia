@@ -1,15 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import { faceVisible, meshChunk } from '../src/render/mesher';
+import { faceVisible } from '../src/render/mesher';
 import { B, PASS_CUTOUT, PASS_OPAQUE, PASS_TRANSLUCENT, SHAPE_CUBE } from '../src/world/blocks';
-import { World } from '../src/world/world';
+import type { World } from '../src/world/world';
+import { classicWorld, meshAt } from './helpers';
 
-function quads(world: World): number[] {
-  const m = meshChunk(world, 0, 0, 0);
-  return m.map((p) => p?.quads ?? 0);
+function quads(world: World, cx = 0, sy = 0, cz = 0): number[] {
+  return meshAt(world, cx, sy, cz).map((p) => p?.quads ?? 0);
 }
 
 function worldWith(cells: Array<[number, number, number, number]>): World {
-  const w = new World(32, 32, 32, 0);
+  const w = classicWorld(32, 32, 32);
   for (const [x, y, z, id] of cells) w.setBlock(x, y, z, id);
   return w;
 }
@@ -25,9 +25,38 @@ describe('mesher culling', () => {
       [11, 10, 10, B.DIRT],
     ]);
     expect(quads(w)[PASS_OPAQUE]).toBe(10);
-    const m = meshChunk(w, 0, 0, 0)[PASS_OPAQUE]!;
+    const m = meshAt(w, 0, 0, 0)[PASS_OPAQUE]!;
     expect(m.positions.length).toBe(10 * 4 * 3);
-    expect(m.indices.length).toBe(10 * 6);
+  });
+
+  it('culls across chunk and section borders exactly like inside a chunk', () => {
+    // Two cubes straddling the x = 16 chunk border, then the y = 16 section border.
+    const across = worldWith([
+      [15, 10, 5, B.STONE],
+      [16, 10, 5, B.STONE],
+    ]);
+    expect(quads(across, 0, 0, 0)[PASS_OPAQUE]! + quads(across, 1, 0, 0)[PASS_OPAQUE]!).toBe(10);
+    const stacked = worldWith([
+      [5, 15, 5, B.STONE],
+      [5, 16, 5, B.STONE],
+    ]);
+    expect(quads(stacked, 0, 0, 0)[PASS_OPAQUE]! + quads(stacked, 0, 1, 0)[PASS_OPAQUE]!).toBe(10);
+  });
+
+  it('emits chunk-local positions', () => {
+    const w = worldWith([[20, 18, 21, B.STONE]]);
+    const m = meshAt(w, 1, 1, 1)[PASS_OPAQUE]!;
+    const xs = [];
+    const ys = [];
+    const zs = [];
+    for (let i = 0; i < m.positions.length; i += 3) {
+      xs.push(m.positions[i]!);
+      ys.push(m.positions[i + 1]!);
+      zs.push(m.positions[i + 2]!);
+    }
+    expect([Math.min(...xs), Math.max(...xs)]).toEqual([4, 5]);
+    expect([Math.min(...ys), Math.max(...ys)]).toEqual([18, 19]);
+    expect([Math.min(...zs), Math.max(...zs)]).toEqual([5, 6]);
   });
 
   it('culls faces between two blocks of the same transparent type', () => {
@@ -53,9 +82,13 @@ describe('mesher culling', () => {
     expect(q[PASS_CUTOUT]).toBe(4);
   });
 
+  it('produces nothing for an empty section', () => {
+    expect(quads(worldWith([]), 0, 1, 0)).toEqual([0, 0, 0]);
+  });
+
   it('bakes directional shade and shadows into vertex colours', () => {
-    const lit = meshChunk(worldWith([[10, 10, 10, B.STONE]]), 0, 0, 0)[PASS_OPAQUE]!;
-    const shadowed = meshChunk(
+    const lit = meshAt(worldWith([[10, 10, 10, B.STONE]]), 0, 0, 0)[PASS_OPAQUE]!;
+    const shadowed = meshAt(
       worldWith([
         [10, 10, 10, B.STONE],
         [10, 20, 10, B.STONE],
@@ -69,13 +102,22 @@ describe('mesher culling', () => {
     const topShadow = shadowed.colors[2 * 12]!;
     expect(topLit).toBe(255);
     expect(topShadow).toBeLessThan(topLit);
-    const sideLit = lit.colors[0]!;
-    expect(sideLit).toBeLessThan(topLit);
+    expect(lit.colors[0]!).toBeLessThan(topLit);
   });
 
   it('keeps lava fully bright', () => {
-    const m = meshChunk(worldWith([[10, 10, 10, B.LAVA], [10, 20, 10, B.STONE]]), 0, 0, 0)[PASS_OPAQUE]!;
-    const lavaColours = m.colors.slice(0, 6 * 12);
-    expect(Math.min(...lavaColours)).toBe(255);
+    const m = meshAt(worldWith([[10, 10, 10, B.LAVA], [10, 20, 10, B.STONE]]), 0, 0, 0)[PASS_OPAQUE]!;
+    expect(Math.min(...m.colors.slice(0, 6 * 12))).toBe(255);
+  });
+
+  it('shows the map edge against the Classic edge ocean', () => {
+    // A stone block on the map edge below sea level: its outward face looks
+    // into the edge ocean (water) and stays; the one below edgeFloor faces bedrock.
+    const w = classicWorld(16, 64, 16);
+    w.setBlock(0, w.seaLevel - 1, 5, B.STONE);
+    w.setBlock(0, 5, 5, B.STONE);
+    const m = meshAt(w, 0, 1, 0)[PASS_OPAQUE]!;
+    expect(m.quads).toBe(6);
+    expect(meshAt(w, 0, 0, 0)[PASS_OPAQUE]!.quads).toBe(5);
   });
 });
