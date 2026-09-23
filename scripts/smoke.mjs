@@ -112,6 +112,12 @@ try {
     g.player.pitch = -1.2;
     await wait(1200);
     const onGround = g.player.body.onGround;
+    // Hover two blocks up so breaking can't drop us into the hole.
+    const b = g.player.body;
+    g.player.teleport(b.x, b.y + 2, b.z);
+    b.flying = true;
+    g.player.pitch = -1.45;
+    await wait(200);
     const t = g.target;
     if (!t) return { onGround, target: null };
     const w = g.currentWorld;
