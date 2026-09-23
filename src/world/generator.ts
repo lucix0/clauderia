@@ -328,7 +328,7 @@ function grow(lvl: Level, rng: Rng): void {
         lvl.set(x, y, z, B.GRAVEL);
       } else if (above === B.WATER && y >= seaLevel - 4) {
         lvl.set(x, y, z, sandy ? B.SAND : B.DIRT);
-      } else if (above === B.AIR && y <= seaLevel + 1 && y >= seaLevel - 2 && (sandy || y <= seaLevel - 1)) {
+      } else if (above === B.AIR && y <= seaLevel && y >= seaLevel - 2 && (sandy || y <= seaLevel - 1)) {
         lvl.set(x, y, z, B.SAND);
         if (lvl.get(x, y - 1, z) === B.DIRT) lvl.set(x, y - 1, z, B.SAND);
       } else if (above === B.AIR) {

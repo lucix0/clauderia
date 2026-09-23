@@ -323,3 +323,149 @@ kbd {
   image-rendering: pixelated;
   pointer-events: none;
 }
+
+/* ---- Pause menu ---- */
+
+.menu {
+  width: min(92vw, 420px);
+  max-height: 94vh;
+  overflow-y: auto;
+}
+
+.menu-buttons {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 4px 0 10px;
+}
+
+.btn-row {
+  display: flex;
+  gap: 8px;
+}
+
+.btn-row > .btn {
+  flex: 1;
+}
+
+.btn {
+  padding: 9px 14px;
+  border: 1px solid var(--ui-border);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--ui-text);
+  font: 600 15px var(--ui-font);
+  cursor: pointer;
+  transition:
+    background 0.12s,
+    border-color 0.12s;
+}
+
+.btn:hover:not(:disabled),
+.btn:focus-visible {
+  background: rgba(255, 255, 255, 0.16);
+  border-color: rgba(255, 255, 255, 0.35);
+  outline: none;
+}
+
+.btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.btn-primary {
+  background: #2f6fa3;
+  border-color: #4d95cf;
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: #3a82bd;
+}
+
+.menu-status {
+  min-height: 1.3em;
+  margin: 6px 0 2px;
+  font-size: 13px;
+  color: var(--ui-muted);
+}
+
+.menu-status[data-kind='ok'] {
+  color: #8fe388;
+}
+
+.menu-status[data-kind='error'] {
+  color: #ff8a80;
+}
+
+.menu-info {
+  margin: 0 0 8px;
+  font: 12px var(--ui-mono);
+  color: var(--ui-muted);
+}
+
+.form-row {
+  display: grid;
+  grid-template-columns: 1fr 1.3fr auto;
+  align-items: center;
+  gap: 10px;
+  margin: 10px 0;
+  text-align: left;
+  font-size: 14px;
+}
+
+.form-row > span:first-child {
+  color: var(--ui-muted);
+}
+
+.form-row .value {
+  min-width: 3.4em;
+  text-align: right;
+  font: 12px var(--ui-mono);
+}
+
+.field {
+  grid-column: span 2;
+  width: 100%;
+  padding: 7px 9px;
+  border: 1px solid var(--ui-border);
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.35);
+  color: var(--ui-text);
+  font: 14px var(--ui-font);
+}
+
+.field:focus {
+  outline: 2px solid var(--ui-accent);
+  outline-offset: -1px;
+}
+
+.form-row input[type='range'] {
+  width: 100%;
+  accent-color: var(--ui-accent);
+}
+
+.form-row input[type='checkbox'] {
+  justify-self: start;
+  width: 18px;
+  height: 18px;
+  accent-color: var(--ui-accent);
+}
+
+/* ---- F3 debug ---- */
+
+.debug {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.5);
+}
+
+.debug-text {
+  margin: 0;
+  font: 12px/1.45 var(--ui-mono);
+  color: #fff;
+  text-shadow: 1px 1px 0 #000;
+  white-space: pre;
+}
