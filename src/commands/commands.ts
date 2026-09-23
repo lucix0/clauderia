@@ -184,14 +184,14 @@ const COMMANDS: Record<string, CommandDef> = {
     help: 'Find the nearest biome of a kind',
     run(ctx, args) {
       if (!ctx.locateBiome) throw new CommandError('This world has no biomes');
-      const name = (args[0] ?? '').toLowerCase();
+      const name = args.join('_').toLowerCase();
       const names = ctx.biomeNames?.() ?? [];
       if (!names.includes(name)) throw new CommandError(`Unknown biome. Try: ${names.join(', ')}`);
       const p = ctx.position();
       const found = ctx.locateBiome(name, p);
       if (!found) return `No ${name} found nearby`;
       const dist = Math.round(Math.hypot(found.x - p.x, found.z - p.z));
-      return `Nearest ${name} at ${Math.floor(found.x)} ~ ${Math.floor(found.z)} (${dist} blocks away)`;
+      return `Nearest ${name} at ${Math.floor(found.x)} ${Math.floor(found.y)} ${Math.floor(found.z)} (${dist} blocks away)`;
     },
   },
   difficulty: {

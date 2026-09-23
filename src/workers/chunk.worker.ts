@@ -16,8 +16,8 @@ const padded = createPadded();
 
 function run(job: JobRequest): JobResult {
   if (job.kind === 'generate') {
-    const { blocks } = infiniteGenerator(job.seed).generate(job.cx, job.cz);
-    return { kind: 'generate', cx: job.cx, cz: job.cz, blocks };
+    const { blocks, tints, biomes } = infiniteGenerator(job.seed).generate(job.cx, job.cz);
+    return { kind: 'generate', cx: job.cx, cz: job.cz, blocks, tints, biomes };
   }
   if (job.kind === 'light') {
     const t = performance.now();

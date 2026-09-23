@@ -22,6 +22,8 @@ function withVoxelLight(material: THREE.MeshBasicMaterial): THREE.MeshBasicMater
         `#include <common>
 attribute float skyLight;
 attribute float blockLight;
+attribute vec3 tint;
+varying vec3 vTint;
 uniform float uDaylight;`,
       )
       .replace(
@@ -36,10 +38,23 @@ uniform float uDaylight;`,
   float b = f / (4.0 - 3.0 * f);
   float bright = mix(0.06, 1.0, mix(b, sqrt(b), 0.45));
   float warmth = clamp((blockLevel - skyLevel) / 6.0, 0.0, 1.0);
-  vec3 tint = mix(vec3(1.0), vec3(1.0, 0.8, 0.58), warmth * 0.85);
+  vec3 warm = mix(vec3(1.0), vec3(1.0, 0.8, 0.58), warmth * 0.85);
   vec3 moon = mix(vec3(0.72, 0.8, 1.0), vec3(1.0), clamp(uDaylight * 1.4 + warmth, 0.0, 1.0));
-  vColor.rgb *= pow(vec3(bright), vec3(2.2)) * tint * moon;
+  vColor.rgb *= pow(vec3(bright), vec3(2.2)) * warm * moon;
+  vTint = pow(tint, vec3(2.2));
 }`,
+      );
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vTint;')
+      .replace(
+        '#include <map_fragment>',
+        `#include <map_fragment>
+#ifdef TINT_MASK
+  // Opaque tiles mark their tinted pixels with alpha < 1 (grass).
+  diffuseColor.rgb *= sampledDiffuseColor.a < 0.99 ? vTint : vec3(1.0);
+#else
+  diffuseColor.rgb *= vTint;
+#endif`,
       );
   };
   material.customProgramCacheKey = () => `voxel-light-${material.name}`;
@@ -58,6 +73,7 @@ export function createMaterials(atlas: THREE.Texture): THREE.MeshBasicMaterial[]
     // Seen from below when swimming, so draw both sides.
     side: THREE.DoubleSide,
   });
+  opaque.defines = { TINT_MASK: 1 };
   opaque.name = 'opaque';
   cutout.name = 'cutout';
   translucent.name = 'translucent';

@@ -40,6 +40,8 @@ import { loadSettings, sanitizeSettings, saveSettings, type Settings } from './u
 import { TitleScreen, type CreateWorldOptions } from './ui/title';
 import { randomSeed, seedFromString } from './util/prng';
 import { B, blockBounds, blockName, DEFAULT_HOTBAR, IS_SOLID, isValidBlock } from './world/blocks';
+import { BIOME_KEYS, BIOMES } from './world/gen/biomes';
+import { infiniteGenerator } from './world/gen/infinite';
 import { breakBlock, placeBlock, placementTarget, placementValue, type Cell } from './world/placement';
 import type { World } from './world/world';
 
@@ -680,6 +682,18 @@ export class Game {
         if (this.session) this.session.time = t;
       },
     };
+    if (world.type === 'infinite') {
+      const gen = infiniteGenerator(world.seed);
+      ctx.biomeAt = (x, z) => {
+        const id = world.biomeAt(x, z);
+        return (id >= 0 ? BIOMES[id]! : gen.biomeAt(x, z)).name;
+      };
+      ctx.biomeNames = () => BIOME_KEYS;
+      ctx.locateBiome = (name, from) => {
+        const found = gen.locateBiome(name, from.x, from.z);
+        return found ? { x: found.x + 0.5, y: gen.heightAt(found.x, found.z) + 1, z: found.z + 0.5 } : null;
+      };
+    }
     return ctx;
   }
 
@@ -913,6 +927,10 @@ export class Game {
               const t = Math.floor(this.session?.time ?? 0);
               return `Light: sky ${l >> 4}, block ${l & 15}   Time: ${t} (${formatClock(t)}) · daylight ${this.sky.daylight.toFixed(2)}${this.session?.lockDaytime ? ' · locked' : ''}`;
             })(),
+            `Biome: ${(() => {
+              const id = w.biomeAt(Math.floor(b.x), Math.floor(b.z));
+              return id >= 0 ? BIOMES[id]!.name : w.type === 'classic' ? 'none (Classic)' : '—';
+            })()}`,
           ]
         : [],
     });

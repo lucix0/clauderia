@@ -48,9 +48,31 @@ export const T = {
   SAPLING: 38,
   WOOL_FIRST: 39, // 16 consecutive wool tiles
   TORCH: 55,
+  SANDSTONE_TOP: 56,
+  SANDSTONE_SIDE: 57,
+  SANDSTONE_BOTTOM: 58,
+  SNOW: 59,
+  ICE: 60,
+  CACTUS_SIDE: 61,
+  CACTUS_TOP: 62,
+  CACTUS_BOTTOM: 63,
+  DEAD_BUSH: 64,
+  TALL_GRASS: 65,
+  CLAY: 66,
+  SPRUCE_LOG: 67,
+  SPRUCE_LOG_TOP: 68,
+  SPRUCE_LEAVES: 69,
+  SPRUCE_PLANKS: 70,
+  BIRCH_LOG: 71,
+  BIRCH_LOG_TOP: 72,
+  BIRCH_LEAVES: 73,
+  BIRCH_PLANKS: 74,
+  DIAMOND_ORE: 75,
+  DIAMOND_BLOCK: 76,
+  GRASS_SIDE_SNOW: 77,
 } as const;
 
-export const TILE_COUNT = T.TORCH + 1;
+export const TILE_COUNT = T.GRASS_SIDE_SNOW + 1;
 export const ATLAS_TILES_PER_ROW = 16;
 
 /** Block ids. Stored as bytes in the world array. */
@@ -89,9 +111,25 @@ export const B = {
   MOSSY_COBBLESTONE: 46,
   OBSIDIAN: 47,
   TORCH: 48,
+  SANDSTONE: 49,
+  SNOW_BLOCK: 50,
+  SNOW_LAYER: 51,
+  ICE: 52,
+  CACTUS: 53,
+  DEAD_BUSH: 54,
+  TALL_GRASS: 55,
+  CLAY: 56,
+  SPRUCE_LOG: 57,
+  SPRUCE_LEAVES: 58,
+  SPRUCE_PLANKS: 59,
+  BIRCH_LOG: 60,
+  BIRCH_LEAVES: 61,
+  BIRCH_PLANKS: 62,
+  DIAMOND_ORE: 63,
+  DIAMOND_BLOCK: 64,
 } as const;
 
-export const BLOCK_COUNT = 49;
+export const BLOCK_COUNT = 65;
 
 /**
  * Stored block values are 16-bit: the low byte is the block id, the high byte
@@ -111,7 +149,12 @@ export function withState(id: number, state: number): number {
   return (id & ID_MASK) | ((state & 0xff) << 8);
 }
 
-export type Shape = 'none' | 'cube' | 'cross' | 'slab' | 'torch';
+export type Shape = 'none' | 'cube' | 'cross' | 'slab' | 'torch' | 'layer' | 'cactus';
+/**
+ * How a block's colour follows the biome: none, the column's grass /
+ * foliage / water colour, or a fixed colour (0xRRGGBB).
+ */
+export type Tint = 'none' | 'grass' | 'foliage' | 'water' | number;
 export type RenderPass = 'opaque' | 'cutout' | 'translucent';
 
 export const SHAPE_NONE = 0;
@@ -119,6 +162,21 @@ export const SHAPE_CUBE = 1;
 export const SHAPE_CROSS = 2;
 export const SHAPE_SLAB = 3;
 export const SHAPE_TORCH = 4;
+/** Thin layer on the floor (snow): drawn like a 2/16-tall slab. */
+export const SHAPE_LAYER = 5;
+/** Cube whose sides are inset by 1/16 (cactus). */
+export const SHAPE_CACTUS = 6;
+
+export const TINT_NONE = 0;
+export const TINT_GRASS = 1;
+export const TINT_FOLIAGE = 2;
+export const TINT_WATER = 3;
+export const TINT_FIXED = 4;
+
+/** Tints used where a column has no biome colours (Classic worlds, icons). */
+export const DEFAULT_GRASS_TINT = 0x77bf4c;
+export const DEFAULT_FOLIAGE_TINT = 0x5aa83b;
+export const DEFAULT_WATER_TINT = 0x4379e8;
 
 export const PASS_OPAQUE = 0;
 export const PASS_CUTOUT = 1;
@@ -151,6 +209,11 @@ export interface BlockDef {
   readonly emit: number;
   /** How much light it takes away when passing through (0 clear … 15 opaque). */
   readonly opacity: number;
+  readonly tint: Tint;
+  /** Placing a block into this cell just replaces it (tall grass, snow layer). */
+  readonly replaceable: boolean;
+  /** Logs: the block state holds an axis (0 Y, 1 X, 2 Z). */
+  readonly axis: boolean;
 }
 
 interface BlockSpec {
@@ -167,6 +230,9 @@ interface BlockSpec {
   plant?: boolean;
   emit?: number;
   opacity?: number;
+  tint?: Tint;
+  replaceable?: boolean;
+  axis?: boolean;
 }
 
 function all(t: number): FaceTiles {
@@ -200,10 +266,10 @@ export const WOOL_NAMES: readonly string[] = [
 const specs: Record<number, BlockSpec> = {
   [B.AIR]: { name: 'Air', tiles: 0, solid: false, blocksLight: false, shape: 'none', selectable: false },
   [B.STONE]: { name: 'Stone', tiles: T.STONE },
-  [B.GRASS]: { name: 'Grass', tiles: column(T.GRASS_SIDE, T.GRASS_TOP, T.DIRT) },
+  [B.GRASS]: { name: 'Grass', tiles: column(T.GRASS_SIDE, T.GRASS_TOP, T.DIRT), tint: 'grass' },
   [B.DIRT]: { name: 'Dirt', tiles: T.DIRT },
   [B.COBBLESTONE]: { name: 'Cobblestone', tiles: T.COBBLE },
-  [B.PLANKS]: { name: 'Planks', tiles: T.PLANKS },
+  [B.PLANKS]: { name: 'Oak Planks', tiles: T.PLANKS },
   [B.SAPLING]: { name: 'Sapling', tiles: T.SAPLING, shape: 'cross', plant: true },
   [B.BEDROCK]: { name: 'Bedrock', tiles: T.BEDROCK },
   [B.WATER]: {
@@ -216,6 +282,7 @@ const specs: Record<number, BlockSpec> = {
     liquid: true,
     selectable: false,
     opacity: 2,
+    tint: 'water',
   },
   [B.LAVA]: {
     name: 'Lava',
@@ -232,8 +299,8 @@ const specs: Record<number, BlockSpec> = {
   [B.GOLD_ORE]: { name: 'Gold Ore', tiles: T.GOLD_ORE },
   [B.IRON_ORE]: { name: 'Iron Ore', tiles: T.IRON_ORE },
   [B.COAL_ORE]: { name: 'Coal Ore', tiles: T.COAL_ORE },
-  [B.LOG]: { name: 'Log', tiles: column(T.LOG_SIDE, T.LOG_TOP, T.LOG_TOP) },
-  [B.LEAVES]: { name: 'Leaves', tiles: T.LEAVES, pass: 'cutout', cullSame: false, opacity: 1 },
+  [B.LOG]: { name: 'Oak Log', tiles: column(T.LOG_SIDE, T.LOG_TOP, T.LOG_TOP), axis: true },
+  [B.LEAVES]: { name: 'Oak Leaves', tiles: T.LEAVES, pass: 'cutout', cullSame: false, opacity: 1, tint: 'foliage' },
   [B.SPONGE]: { name: 'Sponge', tiles: T.SPONGE },
   [B.GLASS]: { name: 'Glass', tiles: T.GLASS, blocksLight: false, pass: 'cutout', cullSame: true },
   [B.DANDELION]: { name: 'Dandelion', tiles: T.DANDELION, shape: 'cross', plant: true },
@@ -258,6 +325,38 @@ const specs: Record<number, BlockSpec> = {
     pass: 'cutout',
     emit: 14,
   },
+  [B.SANDSTONE]: { name: 'Sandstone', tiles: column(T.SANDSTONE_SIDE, T.SANDSTONE_TOP, T.SANDSTONE_BOTTOM) },
+  [B.SNOW_BLOCK]: { name: 'Snow Block', tiles: T.SNOW },
+  [B.SNOW_LAYER]: {
+    name: 'Snow',
+    tiles: T.SNOW,
+    shape: 'layer',
+    solid: false,
+    blocksLight: false,
+    cullSame: true,
+    replaceable: true,
+  },
+  [B.ICE]: { name: 'Ice', tiles: T.ICE, pass: 'translucent', cullSame: true, blocksLight: true, opacity: 2 },
+  [B.CACTUS]: {
+    name: 'Cactus',
+    tiles: column(T.CACTUS_SIDE, T.CACTUS_TOP, T.CACTUS_BOTTOM),
+    shape: 'cactus',
+    pass: 'cutout',
+    cullSame: true,
+    opacity: 0,
+    blocksLight: false,
+  },
+  [B.DEAD_BUSH]: { name: 'Dead Bush', tiles: T.DEAD_BUSH, shape: 'cross', plant: true, replaceable: true },
+  [B.TALL_GRASS]: { name: 'Tall Grass', tiles: T.TALL_GRASS, shape: 'cross', plant: true, replaceable: true, tint: 'grass' },
+  [B.CLAY]: { name: 'Clay', tiles: T.CLAY },
+  [B.SPRUCE_LOG]: { name: 'Spruce Log', tiles: column(T.SPRUCE_LOG, T.SPRUCE_LOG_TOP, T.SPRUCE_LOG_TOP), axis: true },
+  [B.SPRUCE_LEAVES]: { name: 'Spruce Leaves', tiles: T.SPRUCE_LEAVES, pass: 'cutout', opacity: 1, tint: 0x5f8f5f },
+  [B.SPRUCE_PLANKS]: { name: 'Spruce Planks', tiles: T.SPRUCE_PLANKS },
+  [B.BIRCH_LOG]: { name: 'Birch Log', tiles: column(T.BIRCH_LOG, T.BIRCH_LOG_TOP, T.BIRCH_LOG_TOP), axis: true },
+  [B.BIRCH_LEAVES]: { name: 'Birch Leaves', tiles: T.BIRCH_LEAVES, pass: 'cutout', opacity: 1, tint: 0x80a755 },
+  [B.BIRCH_PLANKS]: { name: 'Birch Planks', tiles: T.BIRCH_PLANKS },
+  [B.DIAMOND_ORE]: { name: 'Diamond Ore', tiles: T.DIAMOND_ORE },
+  [B.DIAMOND_BLOCK]: { name: 'Diamond Block', tiles: T.DIAMOND_BLOCK },
 };
 for (let i = 0; i < 16; i++) {
   specs[B.WOOL_FIRST + i] = { name: `${WOOL_NAMES[i]} Wool`, tiles: T.WOOL_FIRST + i };
@@ -282,6 +381,9 @@ function build(id: number, s: BlockSpec): BlockDef {
     plant: s.plant ?? false,
     emit: s.emit ?? 0,
     opacity: s.opacity ?? (blocksLight ? 15 : 0),
+    tint: s.tint ?? 'none',
+    replaceable: s.replaceable ?? false,
+    axis: s.axis ?? false,
   };
 }
 
@@ -299,6 +401,8 @@ const SHAPE_CODES: Record<Shape, number> = {
   cross: SHAPE_CROSS,
   slab: SHAPE_SLAB,
   torch: SHAPE_TORCH,
+  layer: SHAPE_LAYER,
+  cactus: SHAPE_CACTUS,
 };
 const PASS_CODES: Record<RenderPass, number> = {
   opaque: PASS_OPAQUE,
@@ -323,6 +427,11 @@ export const FACE_TILES = new Uint8Array(256 * 6);
 export const LIGHT_EMIT = new Uint8Array(256);
 /** Light opacity of each block id (0 clear … 15 opaque). Unknown ids are opaque. */
 export const LIGHT_OPACITY = new Uint8Array(256).fill(15);
+/** Tint mode per id (TINT_*); fixed tints keep their colour in TINT_COLOR. */
+export const TINT_MODE = new Uint8Array(256);
+export const TINT_COLOR = new Uint32Array(256);
+export const REPLACEABLE = new Uint8Array(256);
+export const HAS_AXIS = new Uint8Array(256);
 
 for (const def of BLOCKS) {
   const id = def.id;
@@ -338,6 +447,14 @@ for (const def of BLOCKS) {
   OCCLUDES[id] = def.shape === 'cube' && def.pass === 'opaque' ? 1 : 0;
   LIGHT_EMIT[id] = def.emit;
   LIGHT_OPACITY[id] = def.opacity;
+  if (typeof def.tint === 'number') {
+    TINT_MODE[id] = TINT_FIXED;
+    TINT_COLOR[id] = def.tint;
+  } else {
+    TINT_MODE[id] = { none: TINT_NONE, grass: TINT_GRASS, foliage: TINT_FOLIAGE, water: TINT_WATER }[def.tint];
+  }
+  REPLACEABLE[id] = def.replaceable ? 1 : 0;
+  HAS_AXIS[id] = def.axis ? 1 : 0;
   for (let f = 0; f < 6; f++) FACE_TILES[id * 6 + f] = def.tiles[f]!;
 }
 
@@ -355,9 +472,32 @@ export function collisionHeight(id: number): number {
   return SHAPE[id] === SHAPE_SLAB ? 0.5 : 1;
 }
 
+/** Visual height of partial-height shapes (slab 0.5, snow layer 2/16), else 1. */
+export function shapeHeight(id: number): number {
+  const shape = SHAPE[id];
+  return shape === SHAPE_SLAB ? 0.5 : shape === SHAPE_LAYER ? 0.125 : 1;
+}
+
 /** Can a plant (or a torch) sit on / hang from this block? */
 export function supportsPlant(id: number): boolean {
   return IS_SOLID[id] === 1 && SHAPE[id] === SHAPE_CUBE;
+}
+
+function isLeafId(id: number): boolean {
+  return id === B.LEAVES || id === B.SPRUCE_LEAVES || id === B.BIRCH_LEAVES;
+}
+
+/**
+ * Can block value `value` rest on block id `below`? Plants, floor torches,
+ * snow layers and cacti need the right block underneath; everything else
+ * doesn't care.
+ */
+export function restsOn(value: number, below: number): boolean {
+  const id = value & ID_MASK;
+  if (IS_PLANT[id] || (id === B.TORCH && value >> 8 === 0)) return supportsPlant(below);
+  if (id === B.SNOW_LAYER) return supportsPlant(below) || isLeafId(below);
+  if (id === B.CACTUS) return below === B.SAND || below === B.CACTUS;
+  return true;
 }
 
 /**
@@ -378,12 +518,14 @@ export function blockBounds(id: number): readonly [number, number, number, numbe
   if (shape === SHAPE_SLAB) return SLAB_BOUNDS;
   if (shape === SHAPE_CROSS) return CROSS_BOUNDS;
   if (shape === SHAPE_TORCH) return TORCH_BOUNDS;
+  if (shape === SHAPE_LAYER) return LAYER_BOUNDS;
   return CUBE_BOUNDS;
 }
 const CUBE_BOUNDS = [0, 0, 0, 1, 1, 1] as const;
 const SLAB_BOUNDS = [0, 0, 0, 1, 0.5, 1] as const;
 const CROSS_BOUNDS = [0.2, 0, 0.2, 0.8, 0.8, 0.8] as const;
 const TORCH_BOUNDS = [0.4, 0, 0.4, 0.6, 0.65, 0.6] as const;
+const LAYER_BOUNDS = [0, 0, 0, 1, 0.125, 1] as const;
 
 /** Every block a player can pick from the block picker (everything except air). */
 export const PICKABLE_BLOCKS: readonly number[] = [
@@ -415,6 +557,22 @@ export const PICKABLE_BLOCKS: readonly number[] = [
   B.TNT,
   B.OBSIDIAN,
   B.TORCH,
+  B.SANDSTONE,
+  B.SNOW_BLOCK,
+  B.SNOW_LAYER,
+  B.ICE,
+  B.CACTUS,
+  B.DEAD_BUSH,
+  B.TALL_GRASS,
+  B.CLAY,
+  B.SPRUCE_LOG,
+  B.SPRUCE_LEAVES,
+  B.SPRUCE_PLANKS,
+  B.BIRCH_LOG,
+  B.BIRCH_LEAVES,
+  B.BIRCH_PLANKS,
+  B.DIAMOND_ORE,
+  B.DIAMOND_BLOCK,
   B.DOUBLE_SLAB,
   B.GRASS,
   B.BEDROCK,

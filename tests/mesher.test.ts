@@ -130,4 +130,44 @@ describe('mesher culling', () => {
     expect(m.quads).toBe(6);
     expect(meshAt(w, 0, 0, 0)[PASS_OPAQUE]!.quads).toBe(5);
   });
+
+  it('tints grass by the column colour and leaves stone white', () => {
+    const w = worldWith([[10, 10, 10, B.GRASS], [12, 10, 10, B.STONE]]);
+    const chunk = w.getChunk(0, 0)!;
+    chunk.tints = new Uint8Array(256 * 9);
+    const k = ((10 << 4) | 10) * 9;
+    chunk.tints.set([10, 20, 30], k);
+    const m = meshAt(w, 0, 0, 0)[PASS_OPAQUE]!;
+    const tintOf = (quad: number): number[] => Array.from(m.tints.slice(quad * 12, quad * 12 + 3));
+    const seen = new Set<string>();
+    for (let q = 0; q < m.quads; q++) seen.add(tintOf(q).join(','));
+    expect(seen).toEqual(new Set(['10,20,30', '255,255,255']));
+  });
+
+  it('draws a snow layer as a thin slab that keeps the grass side snowy', () => {
+    const w = worldWith([[10, 10, 10, B.GRASS], [10, 11, 10, B.SNOW_LAYER]]);
+    const m = meshAt(w, 0, 0, 0)[PASS_OPAQUE]!;
+    // Grass: 4 sides + bottom (top hidden under the snow); snow: 4 sides + top (bottom rests on grass).
+    expect(m.quads).toBe(10);
+    let top = 0;
+    for (let i = 1; i < m.positions.length; i += 3) top = Math.max(top, m.positions[i]!);
+    expect(top).toBeCloseTo(11.125);
+    expect(faceVisible(B.SNOW_LAYER, 5, B.STONE, 2)).toBe(true);
+  });
+
+  it('turns logs lying on their side', () => {
+    const upright = meshAt(worldWith([[10, 10, 10, B.LOG]]), 0, 0, 0)[PASS_OPAQUE]!;
+    const sideways = meshAt(worldWith([[10, 10, 10, B.LOG | (1 << 8)]]), 0, 0, 0)[PASS_OPAQUE]!;
+    expect(sideways.quads).toBe(6);
+    expect(Array.from(sideways.uvs)).not.toEqual(Array.from(upright.uvs));
+  });
+
+  it('insets cactus sides and stacks cacti without inner faces', () => {
+    const w = worldWith([[10, 9, 10, B.SAND], [10, 10, 10, B.CACTUS], [10, 11, 10, B.CACTUS]]);
+    const m = meshAt(w, 0, 0, 0)[PASS_CUTOUT]!;
+    expect(m.quads).toBe(4 + 4 + 1); // two rings of sides + the top cap
+    let minX = 99;
+    for (let i = 0; i < m.positions.length; i += 3) minX = Math.min(minX, m.positions[i]!);
+    expect(minX).toBeCloseTo(10 + 1 / 16);
+  });
 });

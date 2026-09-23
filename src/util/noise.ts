@@ -117,3 +117,55 @@ export class CombinedNoise implements Noise2D {
     return this.a.sample(x + this.b.sample(x, y), y);
   }
 }
+
+/**
+ * Fractal Brownian motion: `octaves` layers of gradient noise, each at twice
+ * the frequency and half the amplitude of the last, normalised to about
+ * [-1, 1] (most values within ±0.5). `scale` is the feature size in blocks.
+ * Every octave gets a random offset so the lattice never lines up at 0.
+ */
+export class Fbm implements Noise2D {
+  private readonly layers: GradientNoise[] = [];
+  private readonly offsets: number[] = [];
+  private readonly norm: number;
+
+  constructor(
+    rng: Rng,
+    private readonly octaves: number,
+    private readonly scale: number,
+  ) {
+    let total = 0;
+    for (let i = 0; i < octaves; i++) {
+      this.layers.push(new GradientNoise(rng));
+      this.offsets.push(rng.range(0, 256), rng.range(0, 256));
+      total += 1 / (1 << i);
+    }
+    this.norm = 1 / total;
+  }
+
+  sample(x: number, z: number): number {
+    let sum = 0;
+    let f = 1 / this.scale;
+    let amp = 1;
+    for (let i = 0; i < this.octaves; i++) {
+      sum += this.layers[i]!.sample3(x * f + this.offsets[i * 2]!, z * f + this.offsets[i * 2 + 1]!, i * 0.37) * amp;
+      f *= 2;
+      amp *= 0.5;
+    }
+    return sum * this.norm;
+  }
+
+  /** Ridged variant in [0, 1]: sharp crests where the noise crosses zero. */
+  ridged(x: number, z: number): number {
+    let sum = 0;
+    let f = 1 / this.scale;
+    let amp = 1;
+    for (let i = 0; i < this.octaves; i++) {
+      const n = 1 - Math.abs(this.layers[i]!.sample3(x * f + this.offsets[i * 2]!, z * f + this.offsets[i * 2 + 1]!, i * 0.37));
+      sum += n * n * amp;
+      f *= 2;
+      amp *= 0.5;
+    }
+    return sum * this.norm;
+  }
+}

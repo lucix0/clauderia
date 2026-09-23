@@ -26,6 +26,13 @@ export class Chunk {
   light: Uint8Array | null = null;
   /** Unique per addChunk call (a reloaded chunk gets a new one). */
   loadId = 0;
+  /**
+   * Blended biome colours per column: 9 bytes (grass rgb, foliage rgb,
+   * water rgb) at ((z << 4) | x) * 9. Null uses the default colours.
+   */
+  tints: Uint8Array | null = null;
+  /** Biome id per column ((z << 4) | x), or null (Classic). */
+  biomes: Uint8Array | null = null;
 
   constructor(
     readonly cx: number,

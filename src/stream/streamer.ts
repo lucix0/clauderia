@@ -263,6 +263,8 @@ export class Streamer {
           st.genPending = false;
           if (this.disposed || this.states.get(st.key) !== st || this.world.chunks.has(st.key)) return;
           const chunk = new Chunk(st.cx, st.cz, result.blocks);
+          chunk.tints = result.tints;
+          chunk.biomes = result.biomes;
           if (record?.blocks) {
             chunk.blocks.set(record.blocks);
             chunk.modified = true;

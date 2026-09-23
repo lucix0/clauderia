@@ -1,4 +1,4 @@
-import { B, BLOCKS_LIGHT, idOf, IS_PLANT, supportsPlant, TORCH_ATTACH } from './blocks';
+import { B, BLOCKS_LIGHT, idOf, restsOn, supportsPlant, TORCH_ATTACH } from './blocks';
 import { borderSeeds, relight, spread, type LightStore } from './light';
 import { Chunk } from './chunk';
 import {
@@ -240,7 +240,8 @@ export class World {
    * The single entry point for block changes. Updates light heights, marks
    * affected sections dirty and applies neighbour effects:
    * - a slab placed on a slab merges into a double slab;
-   * - plants pop off when the block under them stops supporting them.
+   * - plants, torches, snow layers and cacti pop off when the block under
+   *   (or behind) them stops supporting them.
    * Returns true when anything changed.
    */
   setBlock(x: number, y: number, z: number, value: number): boolean {
@@ -273,13 +274,12 @@ export class World {
 
     for (const listener of this.listeners) listener(x, y, z, old, value);
 
-    // Plants and torches pop off when their support goes away.
+    // Things resting on this block pop off when their support goes away.
+    if (y + 1 < this.height) {
+      const above = chunk.blocks[i + 256]!;
+      if (above !== B.AIR && !restsOn(above, id)) this.setBlock(x, y + 1, z, B.AIR);
+    }
     if (!supportsPlant(id)) {
-      if (y + 1 < this.height) {
-        const above = chunk.blocks[i + 256]!;
-        const aboveId = idOf(above);
-        if (IS_PLANT[aboveId] || (aboveId === B.TORCH && above >> 8 === 0)) this.setBlock(x, y + 1, z, B.AIR);
-      }
       for (let s = 1; s < TORCH_ATTACH.length; s++) {
         const [dx, dz] = TORCH_ATTACH[s]!;
         const v = this.get(x + dx, y, z + dz);
@@ -287,6 +287,13 @@ export class World {
       }
     }
     return true;
+  }
+
+  /** Biome id of a loaded infinite-world column, or -1. */
+  biomeAt(x: number, z: number): number {
+    const chunk = this.chunkAt(x, z);
+    if (!chunk?.biomes) return -1;
+    return chunk.biomes[(toLocal(z) << 4) | toLocal(x)]!;
   }
 
   // ---- Classic column shadows ----

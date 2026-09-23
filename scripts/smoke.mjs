@@ -1,5 +1,7 @@
 // Playwright smoke test: serves the production build, fails on any console
-// error, and writes screenshots to artifacts/. Phases: the ?debug world view
+// error, and writes screenshots to artifacts/. Phases: the ?debug world views
+// (Classic, then Infinite: day/night, a torch-lit cave, every biome via
+// /locatebiome, streaming while flying and far from the origin)
 // and interactions; title screen create / save / reload / delete; v1 save
 // migration.
 //
@@ -214,6 +216,47 @@ try {
   });
   check(cave.nearTorch >= 12 && cave.dark === 0, 'torches light a sealed cave', JSON.stringify(cave));
   await inf.screenshot({ path: `${OUT}/smoke-cave.png` });
+
+  // Every biome: find it, check /biome agrees, and photograph it from above.
+  const BIOME_KEYS = ['plains', 'forest', 'taiga', 'snowy_tundra', 'desert', 'swamp', 'mountains', 'river', 'beach', 'ocean', 'deep_ocean'];
+  for (const key of BIOME_KEYS) {
+    const res = await inf.evaluate(async (key) => {
+      const g = window.__game;
+      const msg = g.command(`/locatebiome ${key}`);
+      const m = msg.match(/at (-?\d+) (-?\d+) (-?\d+)/);
+      if (!m) return { ok: false, msg };
+      const [x, y, z] = [Number(m[1]), Number(m[2]), Number(m[3])];
+      g.command(`/tp ${x + 0.5} ${Math.max(y, 62) + 2} ${z + 0.5}`);
+      const t0 = performance.now();
+      while (performance.now() - t0 < 30000 && g.streamer.meshedFraction(x >> 4, z >> 4, 2) < 1) {
+        await new Promise((r) => setTimeout(r, 200));
+      }
+      const here = g.command('/biome');
+      // Look north at the spot from 24 blocks south, above whatever is in between.
+      const w = g.currentWorld;
+      const t1 = performance.now();
+      while (performance.now() - t1 < 30000 && g.streamer.meshedFraction(x >> 4, (z + 24) >> 4, 3) < 1) {
+        await new Promise((r) => setTimeout(r, 200));
+      }
+      let top = Math.max(y, 62);
+      for (let dz = 0; dz <= 26; dz += 2) {
+        for (let dx = -3; dx <= 3; dx++) {
+          for (let ty = 127; ty > top; ty--) {
+            if (w.getId(x + dx, ty, z + dz) !== 0) {
+              top = ty;
+              break;
+            }
+          }
+        }
+      }
+      g.setViewpoint({ x: x + 0.5, y: Math.max(Math.max(y, 62) + 16, top + 8), z: z + 24.5, yaw: 0, pitch: -0.45 });
+      await new Promise((r) => setTimeout(r, 500));
+      return { ok: true, msg, here };
+    }, key);
+    const name = key.replace(/_/g, ' ');
+    check(res.ok && res.here.toLowerCase() === `biome: ${name}`, `/locatebiome ${key} finds it`, `${res.msg} → ${res.here}`);
+    await inf.screenshot({ path: `${OUT}/biome-${key}.png` });
+  }
   await inf.evaluate(() => window.__game.setViewpoint({ x: window.__game.player.spawn.x, y: 90, z: window.__game.player.spawn.z, yaw: 0, pitch: -0.3 }));
   const flight = await inf.evaluate(async () => {
     const g = window.__game;

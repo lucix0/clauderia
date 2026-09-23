@@ -22,6 +22,8 @@ export interface MeshInput {
   blocks: Uint16Array;
   /** Sky light in the high nibble, block light in the low one. */
   light: Uint8Array;
+  /** The column's biome tints (see Chunk.tints), or null for defaults. */
+  tints: Uint8Array | null;
 }
 
 /** Full light array of a chunk (sky << 4 | block per cell), or null for full sky. */
@@ -89,7 +91,8 @@ export function buildMeshInput(world: World, chunk: Chunk, sections: number, lig
       }
     }
   }
-  return { cx: chunk.cx, cz: chunk.cz, sections, blocks, light: lightOut };
+  const tints = chunk.tints ? chunk.tints.slice() : null;
+  return { cx: chunk.cx, cz: chunk.cz, sections, blocks, light: lightOut, tints };
 }
 
 /** Copy section `sy` (with its one-cell border) out of a mesh input. */
@@ -97,6 +100,7 @@ export function fillPaddedFromInput(out: PaddedSection, input: MeshInput, sy: nu
   out.sy = sy;
   out.cx = input.cx;
   out.cz = input.cz;
+  out.tints = input.tints;
   const y0 = sy * 16 - 1;
   for (let py = 0; py < PAD; py++) {
     const y = y0 + py;

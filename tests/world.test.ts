@@ -12,6 +12,7 @@ import {
   toChunk,
   toLocal,
 } from '../src/world/coords';
+import { canPlace, placementTarget, placementValue } from '../src/world/placement';
 import { World } from '../src/world/world';
 import { classicWorld } from './helpers';
 
@@ -190,6 +191,33 @@ describe('setBlock side effects', () => {
     w.setBlock(4, 2, 4, B.SAPLING);
     w.setBlock(4, 1, 4, B.STONE); // still a support
     expect(w.get(4, 2, 4)).toBe(B.SAPLING);
+  });
+
+  it('pops snow layers and cacti off with their support', () => {
+    const w = classicWorld(16, 16, 16);
+    w.setBlock(3, 1, 3, B.GRASS);
+    w.setBlock(3, 2, 3, B.SNOW_LAYER);
+    w.setBlock(3, 1, 3, B.AIR);
+    expect(w.get(3, 2, 3)).toBe(B.AIR);
+    w.setBlock(5, 1, 5, B.SAND);
+    w.setBlock(5, 2, 5, B.CACTUS);
+    w.setBlock(5, 3, 5, B.CACTUS);
+    w.setBlock(5, 1, 5, B.DIRT); // cacti only grow on sand
+    expect(w.get(5, 2, 5)).toBe(B.AIR);
+    expect(w.get(5, 3, 5)).toBe(B.AIR);
+  });
+
+  it('places logs along the clicked axis and replaces tall grass', () => {
+    expect(placementValue(B.LOG, [0, 1, 0])).toBe(B.LOG);
+    expect(stateOf(placementValue(B.SPRUCE_LOG, [1, 0, 0])!)).toBe(1);
+    expect(stateOf(placementValue(B.BIRCH_LOG, [0, 0, -1])!)).toBe(2);
+    const w = classicWorld(16, 16, 16);
+    w.setBlock(3, 1, 3, B.GRASS);
+    w.setBlock(3, 2, 3, B.TALL_GRASS);
+    const cell = placementTarget(w, { x: 3, y: 2, z: 3 }, [0, 1, 0], B.STONE);
+    expect(cell).toEqual({ x: 3, y: 2, z: 3 });
+    expect(canPlace(w, cell, B.STONE, () => false)).toBe(true);
+    expect(canPlace(w, { x: 3, y: 2, z: 3 }, B.CACTUS, () => false)).toBe(false); // not on grass
   });
 
   it('notifies listeners and marks the chunk modified', () => {

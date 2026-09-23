@@ -1,7 +1,7 @@
 /**
  * Pure break / place / pick rules shared by the player controller and tests.
  */
-import { B, collisionHeight, IS_LIQUID, IS_PLANT, supportsPlant, TORCH_ATTACH } from './blocks';
+import { B, collisionHeight, HAS_AXIS, IS_LIQUID, REPLACEABLE, restsOn, supportsPlant, TORCH_ATTACH } from './blocks';
 import type { World } from './world';
 
 export interface Cell {
@@ -24,9 +24,9 @@ export function breakBlock(world: World, x: number, y: number, z: number): boole
   return world.setBlock(x, y, z, B.AIR);
 }
 
-/** Cells that can be overwritten by placing a block. */
+/** Cells that can be overwritten by placing a block (air, liquids, tall grass, snow layers). */
 export function isReplaceable(id: number): boolean {
-  return id === B.AIR || IS_LIQUID[id] === 1;
+  return id === B.AIR || IS_LIQUID[id] === 1 || REPLACEABLE[id] === 1;
 }
 
 /**
@@ -42,14 +42,20 @@ export function placementTarget(
   if (id === B.SLAB && normal[1] === 1 && world.get(hit.x, hit.y, hit.z) === B.SLAB) {
     return { x: hit.x, y: hit.y, z: hit.z };
   }
+  // Clicking tall grass or a snow layer replaces it rather than building beside it.
+  if (REPLACEABLE[world.getId(hit.x, hit.y, hit.z)] && id !== world.getId(hit.x, hit.y, hit.z)) {
+    return { x: hit.x, y: hit.y, z: hit.z };
+  }
   return { x: hit.x + normal[0], y: hit.y + normal[1], z: hit.z + normal[2] };
 }
 
 /**
  * The full block value to place for `id` clicked against a face with outward
- * `normal` (torches pick floor / wall attachment). Null when it can't attach.
+ * `normal` (torches pick floor / wall attachment, logs lie along the clicked
+ * axis). Null when it can't attach.
  */
 export function placementValue(id: number, normal: readonly [number, number, number]): number | null {
+  if (HAS_AXIS[id]) return normal[0] !== 0 ? id | (1 << 8) : normal[2] !== 0 ? id | (2 << 8) : id;
   if (id !== B.TORCH) return id;
   if (normal[1] === 1) return B.TORCH; // standing on the floor
   if (normal[1] === -1) return null; // no ceiling torches
@@ -82,8 +88,7 @@ export function canPlace(
   const current = world.getId(x, y, z);
   const merging = id === B.SLAB && current === B.SLAB;
   if (!merging && !isReplaceable(current)) return false;
-  if (IS_PLANT[id] && !supportsPlant(world.getId(x, y - 1, z))) return false;
-  if (id === B.TORCH && !torchSupported(world, cell, value)) return false;
+  if (id === B.TORCH ? !torchSupported(world, cell, value) : !restsOn(value, world.getId(x, y - 1, z))) return false;
   if (merging) return !overlapsPlayer(cell, 1);
   if (id === B.SLAB && world.getId(x, y - 1, z) === B.SLAB) {
     // Lands on the slab below and turns it into a double slab.

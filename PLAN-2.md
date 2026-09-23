@@ -117,3 +117,26 @@ After each milestone: `npm run typecheck && npm test && npm run build`, a
 playable game, then a commit. `npm run bench` reports chunks/second for
 generation, lighting and meshing; the Playwright smoke test grows with each
 milestone.
+
+## Decisions log (feeds the README's judgement calls)
+
+- **M4 biomes**: eleven biomes (ocean, deep ocean, beach, plains, forest,
+  taiga, snowy tundra, desert, swamp, mountains, river). Continentalness sets
+  the base height and oceans; temperature × humidity pick the land biome;
+  a separate "erosion" field raises mountains (continuous factor, so
+  foothills blend in). Rivers are zero-crossings of their own noise: a
+  valley eases the land to just above sea level and a channel cuts to
+  sea − 3; they fade out at coasts and in mountains.
+- Heights: per-biome offset / hill size / flatness are blended over a
+  33-block kernel on a 4-block lattice, then bilinear per column.
+- Tints: grass, leaves, tall grass and water textures are grey; a per-vertex
+  tint multiplies them. Opaque tiles mark tinted pixels with alpha 128 (the
+  grass side fringe), cutout / translucent tiles are tinted everywhere.
+  Spruce and birch leaves use fixed colours. Classic keeps the old colours.
+- Cave mouths: strong tunnels may cut through dry land surfaces; trees are
+  never placed over one.
+- Cactus collides as a full block (contact damage comes with survival);
+  snow layers have no collision. Tall grass, dead bushes and snow layers are
+  replaced by placing a block into them.
+- `/locatebiome` returns the middle of the nearest patch (dry columns only
+  for land biomes), with a y you can `/tp` to.

@@ -9,16 +9,27 @@ import {
   ATLAS_TILES_PER_ROW,
   B,
   CULL_SAME,
+  DEFAULT_FOLIAGE_TINT,
+  DEFAULT_GRASS_TINT,
+  DEFAULT_WATER_TINT,
   FACE_TILES,
   FULL_BRIGHT,
+  HAS_AXIS,
   OCCLUDES,
   PASS,
   PASS_COUNT,
   SHAPE,
+  SHAPE_CACTUS,
   SHAPE_CROSS,
+  SHAPE_LAYER,
   SHAPE_NONE,
   SHAPE_SLAB,
   SHAPE_TORCH,
+  T,
+  TINT_COLOR,
+  TINT_FIXED,
+  TINT_MODE,
+  TINT_NONE,
   TORCH_ATTACH,
 } from '../world/blocks';
 import { PAD, padIndex, type PaddedSection } from './padded';
@@ -34,6 +45,8 @@ export interface PassMesh {
   readonly sky: Uint8Array;
   /** Block light per vertex, 0–255 (= level × 17). */
   readonly block: Uint8Array;
+  /** Biome / block tint per vertex, rgb 0–255 (sRGB). */
+  readonly tints: Uint8Array;
   readonly quads: number;
 }
 
@@ -67,6 +80,29 @@ const FACE_VERTS: ReadonlyArray<readonly number[]> = [
 ];
 const CORNER_U = [0, 1, 1, 0];
 const CORNER_V = [0, 0, 1, 1];
+
+/**
+ * Logs lying along X (state 1) or Z (state 2): which faces show the end
+ * grain (top tile) and which bark faces need their texture turned 90°.
+ */
+const AXIS_END = new Uint8Array(3 * 6);
+const AXIS_ROTATE = new Uint8Array(3 * 6);
+{
+  // Direction of each face's texture v axis: ±X and ±Z faces run along Y, ±Y along Z.
+  const vAxis = [1, 1, 2, 2, 1, 1];
+  const faceAxis = [0, 0, 1, 1, 2, 2];
+  const stateAxis = [1, 0, 2]; // state → world axis (0 x, 1 y, 2 z)
+  for (let s = 0; s < 3; s++) {
+    const axis = stateAxis[s]!;
+    for (let f = 0; f < 6; f++) {
+      AXIS_END[s * 6 + f] = faceAxis[f] === axis ? 1 : 0;
+      AXIS_ROTATE[s * 6 + f] = faceAxis[f] !== axis && vAxis[f] !== axis ? 1 : 0;
+    }
+  }
+}
+
+/** Default tint per TINT_* mode for columns without biome colours. */
+const DEFAULT_TINTS = [0xffffff, DEFAULT_GRASS_TINT, DEFAULT_FOLIAGE_TINT, DEFAULT_WATER_TINT];
 
 const FACE_SHADE = [SHADE_X, SHADE_X, SHADE_TOP, SHADE_BOTTOM, SHADE_Z, SHADE_Z];
 
@@ -103,6 +139,7 @@ class QuadBuffer {
   col = new Uint8Array(4 * 3 * 1024);
   sky = new Uint8Array(4 * 1024);
   blk = new Uint8Array(4 * 1024);
+  tnt = new Uint8Array(4 * 3 * 1024);
   quads = 0;
 
   reset(): void {
@@ -128,9 +165,12 @@ class QuadBuffer {
     const blk = new Uint8Array(cap / 3);
     blk.set(this.blk);
     this.blk = blk;
+    const tnt = new Uint8Array(cap);
+    tnt.set(this.tnt);
+    this.tnt = tnt;
   }
 
-  /** Light every vertex of quad q from a packed light byte. */
+  /** Light every vertex of quad q from a packed light byte and give it the current tint. */
   light(q: number, packed: number): void {
     const s = (packed >> 4) * 17;
     const b = (packed & 15) * 17;
@@ -143,6 +183,13 @@ class QuadBuffer {
     this.blk[v + 1] = b;
     this.blk[v + 2] = b;
     this.blk[v + 3] = b;
+    const t = v * 3;
+    const tn = this.tnt;
+    for (let k = 0; k < 12; k += 3) {
+      tn[t + k] = tintR;
+      tn[t + k + 1] = tintG;
+      tn[t + k + 2] = tintB;
+    }
   }
 
   finish(): PassMesh | null {
@@ -154,6 +201,7 @@ class QuadBuffer {
       colors: this.col.slice(0, q * 12),
       sky: this.sky.slice(0, q * 4),
       block: this.blk.slice(0, q * 4),
+      tints: this.tnt.slice(0, q * 12),
       quads: q,
     };
   }
@@ -161,6 +209,21 @@ class QuadBuffer {
 
 const buffers: QuadBuffer[] = Array.from({ length: PASS_COUNT }, () => new QuadBuffer());
 
+/** Tint of the block being emitted (sRGB bytes); written by QuadBuffer.light. */
+let tintR = 255;
+let tintG = 255;
+let tintB = 255;
+
+function setTint(rgb: number): void {
+  tintR = (rgb >> 16) & 255;
+  tintG = (rgb >> 8) & 255;
+  tintB = rgb & 255;
+}
+
+/**
+ * One face of a cube-like block. `top` is the block's height (slabs, snow
+ * layers); `rotate` turns the texture 90° (logs lying on their side).
+ */
 function emitFace(
   buf: QuadBuffer,
   face: number,
@@ -170,7 +233,8 @@ function emitFace(
   tile: number,
   shade: number,
   light: number,
-  slab: boolean,
+  top: number,
+  rotate: boolean,
 ): void {
   buf.reserve();
   const q = buf.quads++;
@@ -184,9 +248,9 @@ function emitFace(
   const u1 = TILE_UVS[tile * 4 + 2]!;
   let v1 = TILE_UVS[tile * 4 + 3]!;
   const side = face !== 2 && face !== 3;
-  // Half-height sides show the lower half of the tile.
-  if (slab && side) v1 = v0 + (v1 - v0) * 0.5;
-  const top = slab ? 0.5 : 1;
+  // Partial-height sides show the lower part of the tile.
+  if (top < 1 && side) v1 = v0 + (v1 - v0) * top;
+  const turn = rotate ? 1 : 0;
   for (let c = 0; c < 4; c++) {
     const p = q * 12 + c * 3;
     const vy = verts[c * 3 + 1]!;
@@ -194,13 +258,66 @@ function emitFace(
     pos[p + 1] = y + (vy === 1 ? top : 0);
     pos[p + 2] = z + verts[c * 3 + 2]!;
     const t = q * 8 + c * 2;
-    uv[t] = CORNER_U[c] ? u1 : u0;
-    uv[t + 1] = CORNER_V[c] ? v1 : v0;
+    const k = (c + turn) & 3;
+    uv[t] = CORNER_U[k] ? u1 : u0;
+    uv[t + 1] = CORNER_V[k] ? v1 : v0;
     col[p] = shade;
     col[p + 1] = shade;
     col[p + 2] = shade;
   }
 }
+
+const CACTUS_INSET = 1 / 16;
+
+/**
+ * One face of an axis-aligned box inside the cell (cactus). UVs follow the
+ * box so the texture keeps its pixel scale.
+ */
+function emitBoxFace(
+  buf: QuadBuffer,
+  face: number,
+  x: number,
+  y: number,
+  z: number,
+  box: readonly number[],
+  tile: number,
+  shade: number,
+  light: number,
+): void {
+  buf.reserve();
+  const q = buf.quads++;
+  buf.light(q, light);
+  const verts = FACE_VERTS[face]!;
+  const u0 = TILE_UVS[tile * 4]!;
+  const v0 = TILE_UVS[tile * 4 + 1]!;
+  const du = TILE_UVS[tile * 4 + 2]! - u0;
+  const dv = TILE_UVS[tile * 4 + 3]! - v0;
+  for (let c = 0; c < 4; c++) {
+    const p = q * 12 + c * 3;
+    const px = verts[c * 3]! ? box[3]! : box[0]!;
+    const py = verts[c * 3 + 1]! ? box[4]! : box[1]!;
+    const pz = verts[c * 3 + 2]! ? box[5]! : box[2]!;
+    buf.pos[p] = x + px;
+    buf.pos[p + 1] = y + py;
+    buf.pos[p + 2] = z + pz;
+    // Texture coordinates from the position, per face orientation.
+    let u: number;
+    let v: number;
+    if (face === 0) [u, v] = [1 - pz, py];
+    else if (face === 1) [u, v] = [pz, py];
+    else if (face === 2) [u, v] = [px, 1 - pz];
+    else if (face === 3) [u, v] = [px, pz];
+    else if (face === 4) [u, v] = [px, py];
+    else [u, v] = [1 - px, py];
+    buf.uv[q * 8 + c * 2] = u0 + du * u;
+    buf.uv[q * 8 + c * 2 + 1] = v0 + dv * v;
+    buf.col[p] = shade;
+    buf.col[p + 1] = shade;
+    buf.col[p + 2] = shade;
+  }
+}
+
+const CACTUS_BOX = [CACTUS_INSET, 0, CACTUS_INSET, 1 - CACTUS_INSET, 1, 1 - CACTUS_INSET];
 
 /** Two diagonal quads, each emitted with both windings (double-sided). */
 const CROSS_QUADS: ReadonlyArray<readonly number[]> = (() => {
@@ -306,20 +423,26 @@ function emitTorch(buf: QuadBuffer, x: number, y: number, z: number, tile: numbe
   );
 }
 
+function partialHeight(shape: number): number {
+  return shape === SHAPE_SLAB ? 0.5 : shape === SHAPE_LAYER ? 0.125 : 1;
+}
+
 /**
  * Should the face of block `id` (shape `shape`) pointing at neighbour `nb`
  * through face `face` be drawn?
  */
 export function faceVisible(id: number, shape: number, nb: number, face: number): boolean {
   if (nb === B.AIR) return true;
-  if (OCCLUDES[nb]) {
-    // A slab's top sits mid-cell and never touches the block above.
-    return shape === SHAPE_SLAB && face === 2;
-  }
+  const height = partialHeight(shape);
+  // A slab's or snow layer's top sits inside the cell and never touches the block above.
+  if (height < 1 && face === 2) return true;
+  if (OCCLUDES[nb]) return false;
   if (nb === id && CULL_SAME[id]) return false;
-  if (SHAPE[nb] === SHAPE_SLAB) {
-    if (face === 2) return shape === SHAPE_SLAB; // slab bottom covers our top face
-    if (shape === SHAPE_SLAB && face !== 3) return false; // slab beside slab
+  const nbHeight = partialHeight(SHAPE[nb]!);
+  if (nbHeight < 1) {
+    if (face === 2) return false; // the neighbour's bottom covers our top face
+    // Side by side: hidden behind a partial neighbour at least as tall.
+    if (height < 1 && face !== 3 && nbHeight >= height) return false;
   }
   return true;
 }
@@ -331,6 +454,7 @@ export function faceVisible(id: number, shape: number, nb: number, face: number)
 export function meshSection(pad: PaddedSection): ChunkMeshData {
   const blocks = pad.blocks;
   const light = pad.light;
+  const tints = pad.tints;
   const y0 = pad.sy * 16;
 
   for (const b of buffers) b.reset();
@@ -360,6 +484,16 @@ export function meshSection(pad: PaddedSection): ChunkMeshData {
         }
 
         const buf = buffers[PASS[id]!]!;
+        const tintMode = TINT_MODE[id]!;
+        if (tintMode === TINT_NONE) setTint(0xffffff);
+        else if (tintMode === TINT_FIXED) setTint(TINT_COLOR[id]!);
+        else if (tints) {
+          const o = ((z << 4) | x) * 9 + (tintMode - 1) * 3;
+          tintR = tints[o]!;
+          tintG = tints[o + 1]!;
+          tintB = tints[o + 2]!;
+        } else setTint(DEFAULT_TINTS[tintMode]!);
+
         if (shape === SHAPE_CROSS) {
           emitCross(buf, x, y, z, FACE_TILES[id * 6 + 2]!, light[i]!);
           continue;
@@ -368,22 +502,47 @@ export function meshSection(pad: PaddedSection): ChunkMeshData {
           emitTorch(buf, x, y, z, FACE_TILES[id * 6 + 2]!, value >> 8, light[i]!);
           continue;
         }
+        if (shape === SHAPE_CACTUS) {
+          for (let f = 0; f < 6; f++) {
+            const ni = i + PAD_OFFSETS[f]!;
+            const nb = blocks[ni]! & 0xff;
+            const side = f !== 2 && f !== 3;
+            // Inset sides are always visible; ends touch the next block.
+            if (!side && (OCCLUDES[nb] || nb === id)) continue;
+            emitBoxFace(buf, f, x, y, z, CACTUS_BOX, FACE_TILES[id * 6 + f]!, FACE_BYTES[f]!, side ? light[i]! : light[ni]!);
+          }
+          continue;
+        }
 
         const fullBright = FULL_BRIGHT[id] === 1;
-        const slab = shape === SHAPE_SLAB;
+        const top = shape === SHAPE_SLAB ? 0.5 : shape === SHAPE_LAYER ? 0.125 : 1;
+        const axis = HAS_AXIS[id] ? (value >> 8) % 3 : 0;
+        const snowy = id === B.GRASS && isSnow(blocks[i + PAD_LAYER]! & 0xff);
         for (let f = 0; f < 6; f++) {
           const ni = i + PAD_OFFSETS[f]!;
           const nb = blocks[ni]! & 0xff;
-          if (OCCLUDES[nb] && !(slab && f === 2)) continue;
+          if (OCCLUDES[nb] && !(top < 1 && f === 2)) continue;
           if (!faceVisible(id, shape, nb, f)) continue;
           const lightHere = fullBright ? (light[ni]! & 0xf0) | 15 : light[ni]!;
-          emitFace(buf, f, x, y, z, FACE_TILES[id * 6 + f]!, fullBright ? FULL_BYTE : FACE_BYTES[f]!, lightHere, slab);
+          let tile = FACE_TILES[id * 6 + f]!;
+          let rotate = false;
+          if (axis !== 0) {
+            tile = FACE_TILES[id * 6 + (AXIS_END[axis * 6 + f] ? 2 : 0)]!;
+            rotate = AXIS_ROTATE[axis * 6 + f] === 1;
+          } else if (snowy && f !== 2 && f !== 3) {
+            tile = T.GRASS_SIDE_SNOW;
+          }
+          emitFace(buf, f, x, y, z, tile, fullBright ? FULL_BYTE : FACE_BYTES[f]!, lightHere, top, rotate);
         }
       }
     }
   }
 
   return [buffers[0]!.finish(), buffers[1]!.finish(), buffers[2]!.finish()];
+}
+
+function isSnow(id: number): boolean {
+  return id === B.SNOW_LAYER || id === B.SNOW_BLOCK;
 }
 
 /** Index buffer for `quads` quads (two triangles each). */

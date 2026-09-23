@@ -241,6 +241,7 @@ export function mergeParts(parts: readonly PassMesh[]): THREE.BufferGeometry {
   const colors = new Uint8Array(quads * 12);
   const sky = new Uint8Array(quads * 4);
   const block = new Uint8Array(quads * 4);
+  const tints = new Uint8Array(quads * 12);
   let q = 0;
   let minY = CHUNK_HEIGHT;
   let maxY = 0;
@@ -250,6 +251,7 @@ export function mergeParts(parts: readonly PassMesh[]): THREE.BufferGeometry {
     colors.set(p.colors, q * 12);
     sky.set(p.sky, q * 4);
     block.set(p.block, q * 4);
+    tints.set(p.tints, q * 12);
     q += p.quads;
     for (let i = 1; i < p.positions.length; i += 12) {
       const y = p.positions[i]!;
@@ -263,6 +265,7 @@ export function mergeParts(parts: readonly PassMesh[]): THREE.BufferGeometry {
   g.setAttribute('color', new THREE.BufferAttribute(colors, 3, true));
   g.setAttribute('skyLight', new THREE.BufferAttribute(sky, 1, true));
   g.setAttribute('blockLight', new THREE.BufferAttribute(block, 1, true));
+  g.setAttribute('tint', new THREE.BufferAttribute(tints, 3, true));
   g.setIndex(new THREE.BufferAttribute(quadIndices(quads), 1));
   g.boundingBox = new THREE.Box3(new THREE.Vector3(0, Math.max(0, minY - 1), 0), new THREE.Vector3(16, maxY, 16));
   g.boundingSphere = g.boundingBox.getBoundingSphere(new THREE.Sphere());

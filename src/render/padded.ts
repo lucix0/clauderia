@@ -15,6 +15,8 @@ export function padIndex(x: number, y: number, z: number): number {
 export interface PaddedSection {
   readonly blocks: Uint16Array;
   readonly light: Uint8Array;
+  /** Column tints (grass, foliage, water rgb per x/z), or null for defaults. */
+  tints: Uint8Array | null;
   /** Section index (0–7) and column. */
   sy: number;
   cx: number;
@@ -22,5 +24,5 @@ export interface PaddedSection {
 }
 
 export function createPadded(): PaddedSection {
-  return { blocks: new Uint16Array(PAD_VOLUME), light: new Uint8Array(PAD_VOLUME), sy: 0, cx: 0, cz: 0 };
+  return { blocks: new Uint16Array(PAD_VOLUME), light: new Uint8Array(PAD_VOLUME), tints: null, sy: 0, cx: 0, cz: 0 };
 }
