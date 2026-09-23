@@ -2,12 +2,14 @@
  * Chunk pipeline benchmark (run with `npm run bench`): chunks per second
  * for generation, lighting and meshing, single-threaded.
  */
-import { buildMeshInput, columnShadowLight, fillPaddedFromInput } from '../src/render/meshInput';
+import { buildMeshInput, fillPaddedFromInput } from '../src/render/meshInput';
 import { meshSection } from '../src/render/mesher';
 import { createPadded } from '../src/render/padded';
 import { Chunk } from '../src/world/chunk';
 import { SECTIONS } from '../src/world/coords';
 import { InfiniteGenerator } from '../src/world/gen/infinite';
+import { computeChunkLight } from '../src/world/light';
+import { buildLightRegion } from '../src/world/lightRegion';
 import { World } from '../src/world/world';
 
 const SEED = 1337;
@@ -39,7 +41,7 @@ export function run(): string[] {
 
   const inner = chunks.filter((c) => c.cx > 0 && c.cz > 0 && c.cx < SIDE - 1 && c.cz < SIDE - 1);
   const [, lightMs] = time(() => {
-    for (const c of inner) columnShadowLight(c);
+    for (const c of inner) c.light = computeChunkLight(buildLightRegion(world, c.cx, c.cz));
   });
   out.push(row('light', inner.length, lightMs));
 
@@ -47,7 +49,7 @@ export function run(): string[] {
   let quads = 0;
   const [, meshMs] = time(() => {
     for (const c of inner) {
-      const input = buildMeshInput(world, c, c.nonEmpty, columnShadowLight);
+      const input = buildMeshInput(world, c, c.nonEmpty, (ch) => ch.light);
       for (let sy = 0; sy < SECTIONS; sy++) {
         if (!(c.nonEmpty & (1 << sy))) continue;
         fillPaddedFromInput(pad, input, sy);

@@ -179,6 +179,42 @@ try {
   await inf.screenshot({ path: `${OUT}/smoke-infinite.png` });
   const cmd = await inf.evaluate(() => window.__game.command('/seed'));
   check(cmd === 'Seed: 1337', 'command API answers /seed', cmd);
+
+  // Day and night at the spawn.
+  await inf.evaluate(() => window.__game.command('/time set noon'));
+  await inf.waitForTimeout(400);
+  await inf.screenshot({ path: `${OUT}/smoke-noon.png` });
+  const night = await inf.evaluate(async () => {
+    const g = window.__game;
+    g.command('/time set midnight');
+    await new Promise((r) => setTimeout(r, 400));
+    return g.sky.daylight;
+  });
+  check(night < 0.05, 'midnight is dark', `daylight ${night}`);
+  await inf.screenshot({ path: `${OUT}/smoke-midnight.png` });
+
+  // A torch-lit cave: hollow out a room underground and light it.
+  const cave = await inf.evaluate(async () => {
+    const g = window.__game;
+    const w = g.currentWorld;
+    g.command('/time set noon');
+    const s = g.player.spawn;
+    const x0 = Math.floor(s.x);
+    const z0 = Math.floor(s.z);
+    const y0 = 34;
+    for (let x = -7; x <= 7; x++) for (let z = -7; z <= 7; z++) for (let y = 0; y < 5; y++) w.setBlock(x0 + x, y0 + y, z0 + z, 0);
+    for (let x = -7; x <= 7; x++) for (let z = -7; z <= 7; z++) w.setBlock(x0 + x, y0 - 1, z0 + z, 4);
+    w.setBlock(x0 - 5, y0, z0 - 5, 48);
+    w.setBlock(x0 + 4, y0, z0 + 2, 48);
+    w.setBlock(x0 + 7, y0 + 2, z0 - 3, 1);
+    w.setBlock(x0 + 6, y0 + 2, z0 - 3, 48 | (2 << 8)); // wall torch
+    g.setViewpoint({ x: x0 - 4.5, y: y0 + 2.4, z: z0 + 6.5, yaw: 0.45, pitch: -0.3 });
+    await new Promise((r) => setTimeout(r, 1500));
+    return { nearTorch: w.lightAt(x0 - 5, y0 + 1, z0 - 4) & 15, dark: w.lightAt(x0 + 7, y0, z0 + 7) >> 4 };
+  });
+  check(cave.nearTorch >= 12 && cave.dark === 0, 'torches light a sealed cave', JSON.stringify(cave));
+  await inf.screenshot({ path: `${OUT}/smoke-cave.png` });
+  await inf.evaluate(() => window.__game.setViewpoint({ x: window.__game.player.spawn.x, y: 90, z: window.__game.player.spawn.z, yaw: 0, pitch: -0.3 }));
   const flight = await inf.evaluate(async () => {
     const g = window.__game;
     g.player.body.flying = true;

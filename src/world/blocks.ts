@@ -47,9 +47,10 @@ export const T = {
   BROWN_MUSHROOM: 37,
   SAPLING: 38,
   WOOL_FIRST: 39, // 16 consecutive wool tiles
+  TORCH: 55,
 } as const;
 
-export const TILE_COUNT = T.WOOL_FIRST + 16;
+export const TILE_COUNT = T.TORCH + 1;
 export const ATLAS_TILES_PER_ROW = 16;
 
 /** Block ids. Stored as bytes in the world array. */
@@ -87,9 +88,10 @@ export const B = {
   BOOKSHELF: 45,
   MOSSY_COBBLESTONE: 46,
   OBSIDIAN: 47,
+  TORCH: 48,
 } as const;
 
-export const BLOCK_COUNT = 48;
+export const BLOCK_COUNT = 49;
 
 /**
  * Stored block values are 16-bit: the low byte is the block id, the high byte
@@ -109,13 +111,14 @@ export function withState(id: number, state: number): number {
   return (id & ID_MASK) | ((state & 0xff) << 8);
 }
 
-export type Shape = 'none' | 'cube' | 'cross' | 'slab';
+export type Shape = 'none' | 'cube' | 'cross' | 'slab' | 'torch';
 export type RenderPass = 'opaque' | 'cutout' | 'translucent';
 
 export const SHAPE_NONE = 0;
 export const SHAPE_CUBE = 1;
 export const SHAPE_CROSS = 2;
 export const SHAPE_SLAB = 3;
+export const SHAPE_TORCH = 4;
 
 export const PASS_OPAQUE = 0;
 export const PASS_CUTOUT = 1;
@@ -144,6 +147,10 @@ export interface BlockDef {
   readonly selectable: boolean;
   /** Needs a solid block underneath; pops off otherwise. */
   readonly plant: boolean;
+  /** Light emitted (0–15). */
+  readonly emit: number;
+  /** How much light it takes away when passing through (0 clear … 15 opaque). */
+  readonly opacity: number;
 }
 
 interface BlockSpec {
@@ -158,6 +165,8 @@ interface BlockSpec {
   fullBright?: boolean;
   selectable?: boolean;
   plant?: boolean;
+  emit?: number;
+  opacity?: number;
 }
 
 function all(t: number): FaceTiles {
@@ -206,6 +215,7 @@ const specs: Record<number, BlockSpec> = {
     cullSame: true,
     liquid: true,
     selectable: false,
+    opacity: 2,
   },
   [B.LAVA]: {
     name: 'Lava',
@@ -215,6 +225,7 @@ const specs: Record<number, BlockSpec> = {
     liquid: true,
     fullBright: true,
     selectable: false,
+    emit: 15,
   },
   [B.SAND]: { name: 'Sand', tiles: T.SAND },
   [B.GRAVEL]: { name: 'Gravel', tiles: T.GRAVEL },
@@ -222,7 +233,7 @@ const specs: Record<number, BlockSpec> = {
   [B.IRON_ORE]: { name: 'Iron Ore', tiles: T.IRON_ORE },
   [B.COAL_ORE]: { name: 'Coal Ore', tiles: T.COAL_ORE },
   [B.LOG]: { name: 'Log', tiles: column(T.LOG_SIDE, T.LOG_TOP, T.LOG_TOP) },
-  [B.LEAVES]: { name: 'Leaves', tiles: T.LEAVES, pass: 'cutout', cullSame: false },
+  [B.LEAVES]: { name: 'Leaves', tiles: T.LEAVES, pass: 'cutout', cullSame: false, opacity: 1 },
   [B.SPONGE]: { name: 'Sponge', tiles: T.SPONGE },
   [B.GLASS]: { name: 'Glass', tiles: T.GLASS, blocksLight: false, pass: 'cutout', cullSame: true },
   [B.DANDELION]: { name: 'Dandelion', tiles: T.DANDELION, shape: 'cross', plant: true },
@@ -238,6 +249,15 @@ const specs: Record<number, BlockSpec> = {
   [B.BOOKSHELF]: { name: 'Bookshelf', tiles: column(T.BOOKSHELF, T.PLANKS, T.PLANKS) },
   [B.MOSSY_COBBLESTONE]: { name: 'Mossy Cobblestone', tiles: T.MOSSY },
   [B.OBSIDIAN]: { name: 'Obsidian', tiles: T.OBSIDIAN },
+  [B.TORCH]: {
+    name: 'Torch',
+    tiles: T.TORCH,
+    shape: 'torch',
+    solid: false,
+    blocksLight: false,
+    pass: 'cutout',
+    emit: 14,
+  },
 };
 for (let i = 0; i < 16; i++) {
   specs[B.WOOL_FIRST + i] = { name: `${WOOL_NAMES[i]} Wool`, tiles: T.WOOL_FIRST + i };
@@ -246,6 +266,7 @@ for (let i = 0; i < 16; i++) {
 function build(id: number, s: BlockSpec): BlockDef {
   const shape = s.shape ?? 'cube';
   const isCross = shape === 'cross';
+  const blocksLight = s.blocksLight ?? !isCross;
   return {
     id,
     name: s.name,
@@ -259,6 +280,8 @@ function build(id: number, s: BlockSpec): BlockDef {
     fullBright: s.fullBright ?? false,
     selectable: s.selectable ?? true,
     plant: s.plant ?? false,
+    emit: s.emit ?? 0,
+    opacity: s.opacity ?? (blocksLight ? 15 : 0),
   };
 }
 
@@ -270,7 +293,13 @@ export const BLOCKS: readonly BlockDef[] = Array.from({ length: BLOCK_COUNT }, (
 
 // ---- Flat lookup tables for hot loops (mesher, physics, raycast) ----
 
-const SHAPE_CODES: Record<Shape, number> = { none: SHAPE_NONE, cube: SHAPE_CUBE, cross: SHAPE_CROSS, slab: SHAPE_SLAB };
+const SHAPE_CODES: Record<Shape, number> = {
+  none: SHAPE_NONE,
+  cube: SHAPE_CUBE,
+  cross: SHAPE_CROSS,
+  slab: SHAPE_SLAB,
+  torch: SHAPE_TORCH,
+};
 const PASS_CODES: Record<RenderPass, number> = {
   opaque: PASS_OPAQUE,
   cutout: PASS_CUTOUT,
@@ -290,6 +319,10 @@ export const IS_PLANT = new Uint8Array(256);
 export const OCCLUDES = new Uint8Array(256);
 /** Tile per face, 6 entries per block id. */
 export const FACE_TILES = new Uint8Array(256 * 6);
+/** Light emitted by each block id (0–15). */
+export const LIGHT_EMIT = new Uint8Array(256);
+/** Light opacity of each block id (0 clear … 15 opaque). Unknown ids are opaque. */
+export const LIGHT_OPACITY = new Uint8Array(256).fill(15);
 
 for (const def of BLOCKS) {
   const id = def.id;
@@ -303,6 +336,8 @@ for (const def of BLOCKS) {
   SELECTABLE[id] = def.selectable ? 1 : 0;
   IS_PLANT[id] = def.plant ? 1 : 0;
   OCCLUDES[id] = def.shape === 'cube' && def.pass === 'opaque' ? 1 : 0;
+  LIGHT_EMIT[id] = def.emit;
+  LIGHT_OPACITY[id] = def.opacity;
   for (let f = 0; f < 6; f++) FACE_TILES[id * 6 + f] = def.tiles[f]!;
 }
 
@@ -320,21 +355,35 @@ export function collisionHeight(id: number): number {
   return SHAPE[id] === SHAPE_SLAB ? 0.5 : 1;
 }
 
-/** Can a plant sit on top of this block? */
+/** Can a plant (or a torch) sit on / hang from this block? */
 export function supportsPlant(id: number): boolean {
   return IS_SOLID[id] === 1 && SHAPE[id] === SHAPE_CUBE;
 }
+
+/**
+ * Torch attachment states: 0 stands on the floor; 1–4 hang on a wall and
+ * lean away from it toward +X, −X, +Z, −Z (the wall is on the other side).
+ */
+export const TORCH_ATTACH: ReadonlyArray<readonly [number, number]> = [
+  [0, 0],
+  [1, 0],
+  [-1, 0],
+  [0, 1],
+  [0, -1],
+];
 
 /** Selection / hit box of a block inside its cell: [minX, minY, minZ, maxX, maxY, maxZ]. */
 export function blockBounds(id: number): readonly [number, number, number, number, number, number] {
   const shape = SHAPE[id];
   if (shape === SHAPE_SLAB) return SLAB_BOUNDS;
   if (shape === SHAPE_CROSS) return CROSS_BOUNDS;
+  if (shape === SHAPE_TORCH) return TORCH_BOUNDS;
   return CUBE_BOUNDS;
 }
 const CUBE_BOUNDS = [0, 0, 0, 1, 1, 1] as const;
 const SLAB_BOUNDS = [0, 0, 0, 1, 0.5, 1] as const;
 const CROSS_BOUNDS = [0.2, 0, 0.2, 0.8, 0.8, 0.8] as const;
+const TORCH_BOUNDS = [0.4, 0, 0.4, 0.6, 0.65, 0.6] as const;
 
 /** Every block a player can pick from the block picker (everything except air). */
 export const PICKABLE_BLOCKS: readonly number[] = [
@@ -365,6 +414,7 @@ export const PICKABLE_BLOCKS: readonly number[] = [
   B.BOOKSHELF,
   B.TNT,
   B.OBSIDIAN,
+  B.TORCH,
   B.DOUBLE_SLAB,
   B.GRASS,
   B.BEDROCK,

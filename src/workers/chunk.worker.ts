@@ -3,6 +3,7 @@ import { fillPaddedFromInput } from '../render/meshInput';
 import { createPadded } from '../render/padded';
 import { SECTIONS } from '../world/coords';
 import { infiniteGenerator } from '../world/gen/infinite';
+import { computeChunkLight } from '../world/light';
 import { resultTransfers, type JobRequest, type JobResult, type WorkerReply, type WorkerRequest } from './protocol';
 
 interface WorkerScope {
@@ -17,6 +18,11 @@ function run(job: JobRequest): JobResult {
   if (job.kind === 'generate') {
     const { blocks } = infiniteGenerator(job.seed).generate(job.cx, job.cz);
     return { kind: 'generate', cx: job.cx, cz: job.cz, blocks };
+  }
+  if (job.kind === 'light') {
+    const t = performance.now();
+    const light = computeChunkLight(job.ids);
+    return { kind: 'light', cx: job.cx, cz: job.cz, light, ms: performance.now() - t };
   }
   const t0 = performance.now();
   const input = job.input;

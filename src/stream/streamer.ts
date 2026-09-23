@@ -4,6 +4,7 @@ import { buildMeshInput } from '../render/meshInput';
 import type { ChunkRecord } from '../save/records';
 import { Chunk } from '../world/chunk';
 import { chunkKey, toChunk } from '../world/coords';
+import { buildLightRegion } from '../world/lightRegion';
 import type { World } from '../world/world';
 import type { WorkerPool } from '../workers/pool';
 
@@ -21,6 +22,7 @@ interface ColumnState {
   readonly cz: number;
   readonly key: number;
   genPending: boolean;
+  lightPending: boolean;
   meshPending: boolean;
   meshed: boolean;
 }
@@ -31,7 +33,7 @@ interface Upload {
   sections: Array<ChunkMeshData | null>;
 }
 
-/** Extra chunk rings: generate R+2, mesh R, unload beyond R+3. */
+/** Extra chunk rings: generate R+2, light R+1, mesh R, unload beyond R+3. */
 const GEN_MARGIN = 2;
 const UNLOAD_MARGIN = 3;
 
@@ -45,6 +47,7 @@ export class Streamer {
   /** Mesh jobs finished and uploaded (stats). */
   uploads = 0;
   lastMeshMs = 0;
+  lastLightMs = 0;
   private readonly states = new Map<number, ColumnState>();
   /** Finished meshes waiting for upload, newest per column. */
   private readonly uploadsQueue = new Map<number, Upload>();
@@ -115,12 +118,19 @@ export class Streamer {
         const key = chunkKey(cx, cz);
         let st = this.states.get(key);
         if (!st) {
-          st = { cx, cz, key, genPending: false, meshPending: false, meshed: false };
+          st = { cx, cz, key, genPending: false, lightPending: false, meshPending: false, meshed: false };
           this.states.set(key, st);
         }
         const chunk = this.world.chunks.get(key);
         if (!chunk) {
           if (infinite && !st.genPending) this.requestGenerate(st);
+          continue;
+        }
+        const lightR = R + 1;
+        if (!chunk.lit) {
+          if (!st.lightPending && Math.abs(dx) <= lightR && Math.abs(dz) <= lightR && this.neighboursGenerated(cx, cz)) {
+            this.requestLight(st, chunk);
+          }
           continue;
         }
         if (!st.meshed && !st.meshPending && dx * dx + dz * dz <= (R + 0.5) * (R + 0.5) && this.neighboursReady(cx, cz)) {
@@ -144,6 +154,7 @@ export class Streamer {
         }
       }
       this.pool.cancel(jobKey('gen', st.key));
+      this.pool.cancel(jobKey('light', st.key));
       this.pool.cancel(jobKey('mesh', st.key));
       this.states.delete(st.key);
     }
@@ -193,6 +204,16 @@ export class Streamer {
   private wanted(cx: number, cz: number): boolean {
     const b = this.world.bounds;
     return !b || (cx >= 0 && cz >= 0 && cx * 16 < b.sx && cz * 16 < b.sz);
+  }
+
+  private neighboursGenerated(cx: number, cz: number): boolean {
+    for (let dz = -1; dz <= 1; dz++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        if (!this.wanted(cx + dx, cz + dz)) continue;
+        if (!this.world.getChunk(cx + dx, cz + dz)) return false;
+      }
+    }
+    return true;
   }
 
   private neighboursReady(cx: number, cz: number): boolean {
@@ -246,7 +267,6 @@ export class Streamer {
             chunk.blocks.set(record.blocks);
             chunk.modified = true;
           }
-          chunk.lit = true;
           this.world.addChunk(chunk);
           this.hooks.added?.(chunk, record);
         });
@@ -254,6 +274,36 @@ export class Streamer {
       onError: (error) => {
         st.genPending = false;
         console.warn('Chunk generation failed:', error);
+      },
+    });
+  }
+
+  private requestLight(st: ColumnState, chunk: Chunk): void {
+    st.lightPending = true;
+    let sig = 0;
+    this.pool.submit({
+      key: jobKey('light', st.key),
+      request: () => {
+        if (this.world.chunks.get(st.key) !== chunk) {
+          st.lightPending = false;
+          return null;
+        }
+        sig = this.signature(chunk);
+        return { kind: 'light', cx: st.cx, cz: st.cz, ids: buildLightRegion(this.world, st.cx, st.cz) };
+      },
+      priority: () => this.priority(st.cx, st.cz, 0.1),
+      onDone: (result) => {
+        st.lightPending = false;
+        if (result.kind !== 'light' || this.disposed) return;
+        this.lastLightMs = result.ms;
+        if (this.world.chunks.get(st.key) !== chunk || chunk.lit) return;
+        // Computed from blocks that changed since: ask again.
+        if (this.signature(chunk) !== sig) return;
+        this.world.setChunkLight(chunk, result.light);
+      },
+      onError: (error) => {
+        st.lightPending = false;
+        console.warn('Chunk lighting failed:', error);
       },
     });
   }

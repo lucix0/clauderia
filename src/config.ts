@@ -24,12 +24,11 @@ export const STEP_HEIGHT = 0.5;
 export const REACH = 5;
 export const ACTION_REPEAT_S = 0.25;
 
-/** Face brightness (Classic-style directional shading) and shadow multiplier. */
+/** Face brightness (Classic-style directional shading). */
 export const SHADE_TOP = 1.0;
 export const SHADE_Z = 0.8;
 export const SHADE_X = 0.6;
 export const SHADE_BOTTOM = 0.5;
-export const SHADOW = 0.6;
 
 /** Render distance presets in chunks (F cycles through them). */
 export const RENDER_DISTANCES: readonly number[] = [4, 6, 8, 12, 16];

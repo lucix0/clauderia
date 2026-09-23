@@ -1,4 +1,5 @@
-import { B, BLOCKS_LIGHT, idOf, IS_PLANT, supportsPlant } from './blocks';
+import { B, BLOCKS_LIGHT, idOf, IS_PLANT, supportsPlant, TORCH_ATTACH } from './blocks';
+import { borderSeeds, relight, spread, type LightStore } from './light';
 import { Chunk } from './chunk';
 import {
   CHUNK_HEIGHT,
@@ -45,6 +46,25 @@ export class World {
   changeCount = 0;
   private readonly listeners: BlockListener[] = [];
   private loads = 0;
+  /** Live light across chunk borders (used by incremental relighting). */
+  readonly lightStore: LightStore = {
+    id: (x, y, z) => {
+      const c = this.chunks.get(chunkKey(x >> 4, z >> 4));
+      if (!c) return this.inColumnBounds(x, z) ? 255 : this.getVirtual(x, y, z) & 0xff;
+      return c.blocks[(y << 8) | ((z & 15) << 4) | (x & 15)]! & 0xff;
+    },
+    get: (x, y, z) => {
+      const c = this.chunks.get(chunkKey(x >> 4, z >> 4));
+      if (!c || !c.light) return -1;
+      return c.light[(y << 8) | ((z & 15) << 4) | (x & 15)]!;
+    },
+    set: (x, y, z, packed) => {
+      const c = this.chunks.get(chunkKey(x >> 4, z >> 4));
+      if (!c || !c.light) return;
+      c.light[(y << 8) | ((z & 15) << 4) | (x & 15)] = packed;
+      this.markCellDirty(x, y, z);
+    },
+  };
 
   constructor(opts: WorldOptions) {
     this.type = opts.type;
@@ -168,11 +188,43 @@ export class World {
     return this.get(x, y, z);
   }
 
-  /** Classic column shadow: lit when above the highest light-blocking block. */
+  /** Under open sky: full sky light (or, before lighting, nothing light-blocking above). */
   isLit(x: number, y: number, z: number): boolean {
+    if (y >= CHUNK_HEIGHT) return true;
     const c = this.chunkAt(x, z);
     if (!c) return true;
-    return y > c.heights[((z & 15) << 4) | (x & 15)]!;
+    const col = ((z & 15) << 4) | (x & 15);
+    if (c.light) return y < 0 ? false : c.light[(y << 8) | col]! >> 4 === 15;
+    return y > c.heights[col]!;
+  }
+
+  /** Packed light at a cell (sky << 4 | block); full sky outside lit chunks. */
+  lightAt(x: number, y: number, z: number): number {
+    if (y >= CHUNK_HEIGHT) return 0xf0;
+    if (y < 0) return 0;
+    const c = this.chunkAt(x, z);
+    if (!c || !c.light) return 0xf0;
+    return c.light[(y << 8) | ((z & 15) << 4) | (x & 15)]!;
+  }
+
+  /** Install freshly computed light and reconcile it with lit neighbours. */
+  setChunkLight(chunk: Chunk, light: Uint8Array): void {
+    chunk.light = light;
+    const store = this.lightStore;
+    const pairs: Array<[Chunk, Chunk, boolean]> = [];
+    const east = this.getChunk(chunk.cx + 1, chunk.cz);
+    const west = this.getChunk(chunk.cx - 1, chunk.cz);
+    const south = this.getChunk(chunk.cx, chunk.cz + 1);
+    const north = this.getChunk(chunk.cx, chunk.cz - 1);
+    if (east?.light) pairs.push([chunk, east, true]);
+    if (west?.light) pairs.push([west, chunk, true]);
+    if (south?.light) pairs.push([chunk, south, false]);
+    if (north?.light) pairs.push([north, chunk, false]);
+    for (const isSky of [true, false]) {
+      for (const [a, b, alongX] of pairs) {
+        spread(store, borderSeeds(a.blocks, a.light!, b.blocks, b.light!, a.cx, a.cz, alongX, isSky), isSky);
+      }
+    }
   }
 
   addListener(listener: BlockListener): void {
@@ -216,14 +268,23 @@ export class World {
     const oldH = chunk.heights[col]!;
     this.updateHeight(chunk, col, y, id);
     const newH = chunk.heights[col]!;
-    if (oldH !== newH) this.markLightDirty(x, z, oldH, newH);
+    if (chunk.light) relight(this.lightStore, x, y, z);
+    else if (oldH !== newH) this.markLightDirty(x, z, oldH, newH);
 
     for (const listener of this.listeners) listener(x, y, z, old, value);
 
-    // Plants pop off when their support goes away.
-    if (y + 1 < this.height && !supportsPlant(id)) {
-      const above = idOf(chunk.blocks[i + 256]!);
-      if (IS_PLANT[above]) this.setBlock(x, y + 1, z, B.AIR);
+    // Plants and torches pop off when their support goes away.
+    if (!supportsPlant(id)) {
+      if (y + 1 < this.height) {
+        const above = chunk.blocks[i + 256]!;
+        const aboveId = idOf(above);
+        if (IS_PLANT[aboveId] || (aboveId === B.TORCH && above >> 8 === 0)) this.setBlock(x, y + 1, z, B.AIR);
+      }
+      for (let s = 1; s < TORCH_ATTACH.length; s++) {
+        const [dx, dz] = TORCH_ATTACH[s]!;
+        const v = this.get(x + dx, y, z + dz);
+        if (idOf(v) === B.TORCH && v >> 8 === s) this.setBlock(x + dx, y, z + dz, B.AIR);
+      }
     }
     return true;
   }

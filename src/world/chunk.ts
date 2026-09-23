@@ -22,8 +22,8 @@ export class Chunk {
   dirtySections = 0;
   /** Bitmask of sections containing at least one non-air block. */
   nonEmpty = 0;
-  /** Light is computed: safe to mesh against and to simulate in. */
-  lit = true;
+  /** Packed light per cell (sky << 4 | block); null until computed. */
+  light: Uint8Array | null = null;
   /** Unique per addChunk call (a reloaded chunk gets a new one). */
   loadId = 0;
 
@@ -52,6 +52,11 @@ export class Chunk {
       }
     }
     this.nonEmpty = mask;
+  }
+
+  /** Light is computed: safe to mesh against and to simulate in. */
+  get lit(): boolean {
+    return this.light !== null;
   }
 
   markAllDirty(): void {

@@ -4,7 +4,7 @@ import type { Chunk } from '../world/chunk';
 import { CHUNK_HEIGHT, SECTIONS } from '../world/coords';
 import type { World } from '../world/world';
 import { meshSection, quadIndices, type ChunkMeshData, type PassMesh } from './mesher';
-import { buildMeshInput, columnShadowLight, fillPaddedFromInput, type LightReader } from './meshInput';
+import { buildMeshInput, fillPaddedFromInput, type LightReader } from './meshInput';
 import { createPadded } from './padded';
 
 /** Render order per pass: translucent water is drawn after everything else. */
@@ -34,7 +34,7 @@ export class ChunkRenderer {
   private readonly columns = new Map<number, Column>();
   private readonly padded = createPadded();
   /** How cell light is read when building mesh inputs. */
-  lightReader: LightReader = columnShadowLight;
+  lightReader: LightReader = (chunk) => chunk.light;
 
   constructor(private readonly materials: readonly THREE.Material[]) {
     this.group.name = 'chunks';
@@ -239,6 +239,8 @@ export function mergeParts(parts: readonly PassMesh[]): THREE.BufferGeometry {
   const positions = new Float32Array(quads * 12);
   const uvs = new Float32Array(quads * 8);
   const colors = new Uint8Array(quads * 12);
+  const sky = new Uint8Array(quads * 4);
+  const block = new Uint8Array(quads * 4);
   let q = 0;
   let minY = CHUNK_HEIGHT;
   let maxY = 0;
@@ -246,6 +248,8 @@ export function mergeParts(parts: readonly PassMesh[]): THREE.BufferGeometry {
     positions.set(p.positions, q * 12);
     uvs.set(p.uvs, q * 8);
     colors.set(p.colors, q * 12);
+    sky.set(p.sky, q * 4);
+    block.set(p.block, q * 4);
     q += p.quads;
     for (let i = 1; i < p.positions.length; i += 12) {
       const y = p.positions[i]!;
@@ -257,6 +261,8 @@ export function mergeParts(parts: readonly PassMesh[]): THREE.BufferGeometry {
   g.setAttribute('position', new THREE.BufferAttribute(positions, 3));
   g.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
   g.setAttribute('color', new THREE.BufferAttribute(colors, 3, true));
+  g.setAttribute('skyLight', new THREE.BufferAttribute(sky, 1, true));
+  g.setAttribute('blockLight', new THREE.BufferAttribute(block, 1, true));
   g.setIndex(new THREE.BufferAttribute(quadIndices(quads), 1));
   g.boundingBox = new THREE.Box3(new THREE.Vector3(0, Math.max(0, minY - 1), 0), new THREE.Vector3(16, maxY, 16));
   g.boundingSphere = g.boundingBox.getBoundingSphere(new THREE.Sphere());

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { faceVisible } from '../src/render/mesher';
 import { B, PASS_CUTOUT, PASS_OPAQUE, PASS_TRANSLUCENT, SHAPE_CUBE } from '../src/world/blocks';
 import type { World } from '../src/world/world';
-import { classicWorld, meshAt } from './helpers';
+import { classicWorld, lightWorld, meshAt } from './helpers';
 
 function quads(world: World, cx = 0, sy = 0, cz = 0): number[] {
   return meshAt(world, cx, sy, cz).map((p) => p?.quads ?? 0);
@@ -86,28 +86,38 @@ describe('mesher culling', () => {
     expect(quads(worldWith([]), 0, 1, 0)).toEqual([0, 0, 0]);
   });
 
-  it('bakes directional shade and shadows into vertex colours', () => {
-    const lit = meshAt(worldWith([[10, 10, 10, B.STONE]]), 0, 0, 0)[PASS_OPAQUE]!;
-    const shadowed = meshAt(
-      worldWith([
-        [10, 10, 10, B.STONE],
-        [10, 20, 10, B.STONE],
-      ]),
-      0,
-      0,
-      0,
-    )[PASS_OPAQUE]!;
-    // The top face is the 3rd face emitted (+X, -X, +Y ...).
-    const topLit = lit.colors[2 * 12]!;
-    const topShadow = shadowed.colors[2 * 12]!;
-    expect(topLit).toBe(255);
-    expect(topShadow).toBeLessThan(topLit);
-    expect(lit.colors[0]!).toBeLessThan(topLit);
+  it('stores face shade in colours and light in its own attributes', () => {
+    const lone = worldWith([[10, 10, 10, B.STONE]]);
+    lightWorld(lone);
+    const lit = meshAt(lone, 0, 0, 0)[PASS_OPAQUE]!;
+    const covered = worldWith([
+      [10, 10, 10, B.STONE],
+      [10, 20, 10, B.STONE],
+    ]);
+    lightWorld(covered);
+    const shadowed = meshAt(covered, 0, 0, 0)[PASS_OPAQUE]!;
+    // Faces are emitted +X, −X, +Y …: the top face is quad 2.
+    expect(lit.colors[2 * 12]).toBe(255);
+    expect(lit.colors[0]!).toBeLessThan(255); // sides are shaded
+    expect(lit.sky[2 * 4]).toBe(15 * 17);
+    expect(shadowed.sky[2 * 4]).toBe(14 * 17); // lit from the side only
+    expect(shadowed.colors[2 * 12]).toBe(255); // colour ignores light now
+    expect(lit.block[2 * 4]).toBe(0);
   });
 
   it('keeps lava fully bright', () => {
-    const m = meshAt(worldWith([[10, 10, 10, B.LAVA], [10, 20, 10, B.STONE]]), 0, 0, 0)[PASS_OPAQUE]!;
-    expect(Math.min(...m.colors.slice(0, 6 * 12))).toBe(255);
+    const w = worldWith([[10, 10, 10, B.LAVA], [10, 20, 10, B.STONE]]);
+    lightWorld(w);
+    const m = meshAt(w, 0, 0, 0)[PASS_OPAQUE]!;
+    expect(Math.min(...m.block.slice(0, 6 * 4))).toBe(255);
+  });
+
+  it('lights torch faces from the torch cell', () => {
+    const w = worldWith([[10, 9, 10, B.STONE], [10, 10, 10, B.TORCH]]);
+    lightWorld(w);
+    const m = meshAt(w, 0, 0, 0)[PASS_CUTOUT]!;
+    expect(m.quads).toBe(9); // four double-sided planes + a top cap
+    expect(m.block[0]).toBe(14 * 17);
   });
 
   it('shows the map edge against the Classic edge ocean', () => {

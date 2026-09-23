@@ -41,6 +41,10 @@ export class WorldSession {
   /** Records of unloaded chunks not yet written (read back before the DB). */
   private readonly pendingWrites = new Map<string, ChunkRecord>();
   private flushTimer = 0;
+  /** Ticks into the day (0–23999). */
+  time: number;
+  /** Stop the day cycle for this world. */
+  lockDaytime: boolean;
   private queued: Promise<boolean> | null = null;
   private nextPlayer: PlayerRecord | null = null;
 
@@ -50,6 +54,13 @@ export class WorldSession {
     readonly persistent: boolean,
   ) {
     this.ticker = new Ticker(world);
+    this.time = record.time;
+    this.lockDaytime = record.lockDaytime;
+  }
+
+  /** Advance the clock by one tick (20 per second) unless daytime is locked. */
+  tickTime(): void {
+    if (!this.lockDaytime) this.time = (this.time + 1) % 24000;
   }
 
   /** Build the record for a brand-new world. */
@@ -117,6 +128,9 @@ export class WorldSession {
       gameMode: 'creative',
       difficulty: 'normal',
     });
+    // Stable screenshots: noon, clock stopped (`/time set` still works).
+    record.time = 6000;
+    record.lockDaytime = true;
     return WorldSession.open(record, false, progress);
   }
 
@@ -216,7 +230,13 @@ export class WorldSession {
     const pending = [...this.pendingWrites.entries()];
     // Pending records first: a newer copy of a reloaded chunk overwrites them.
     const chunks = [...pending.map(([, r]) => r), ...this.unsavedChunks()];
-    this.record = { ...this.record, player, lastPlayed: Date.now() };
+    this.record = {
+      ...this.record,
+      player,
+      time: Math.floor(this.time),
+      lockDaytime: this.lockDaytime,
+      lastPlayed: Date.now(),
+    };
     await saveBatch(this.record, await packChunks(this.record.id, chunks));
     for (const [key, rec] of pending) if (this.pendingWrites.get(key) === rec) this.pendingWrites.delete(key);
     for (const c of this.world.chunks.values()) {

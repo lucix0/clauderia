@@ -1,7 +1,7 @@
 /**
  * Pure break / place / pick rules shared by the player controller and tests.
  */
-import { B, collisionHeight, IS_LIQUID, IS_PLANT, supportsPlant } from './blocks';
+import { B, collisionHeight, IS_LIQUID, IS_PLANT, supportsPlant, TORCH_ATTACH } from './blocks';
 import type { World } from './world';
 
 export interface Cell {
@@ -46,6 +46,26 @@ export function placementTarget(
 }
 
 /**
+ * The full block value to place for `id` clicked against a face with outward
+ * `normal` (torches pick floor / wall attachment). Null when it can't attach.
+ */
+export function placementValue(id: number, normal: readonly [number, number, number]): number | null {
+  if (id !== B.TORCH) return id;
+  if (normal[1] === 1) return B.TORCH; // standing on the floor
+  if (normal[1] === -1) return null; // no ceiling torches
+  const state = TORCH_ATTACH.findIndex(([dx, dz], i) => i > 0 && dx === normal[0] && dz === normal[2]);
+  return state > 0 ? B.TORCH | (state << 8) : null;
+}
+
+/** Is the block a torch in this cell would hang from / stand on still there? */
+export function torchSupported(world: World, cell: Cell, value: number): boolean {
+  const state = value >> 8;
+  const [dx, dz] = TORCH_ATTACH[state] ?? [0, 0];
+  if (state === 0) return supportsPlant(world.getId(cell.x, cell.y - 1, cell.z));
+  return supportsPlant(world.getId(cell.x - dx, cell.y, cell.z - dz));
+}
+
+/**
  * Check whether `id` may go at `cell`. `overlapsPlayer(cell, height)` reports
  * whether a solid box of that height in the cell would intersect the player.
  */
@@ -56,13 +76,16 @@ export function canPlace(
   overlapsPlayer: (cell: Cell, height: number) => boolean,
 ): boolean {
   const { x, y, z } = cell;
+  const value = id;
+  id = id & 0xff;
   if (!world.inBounds(x, y, z) || id === B.AIR) return false;
-  const current = world.get(x, y, z);
+  const current = world.getId(x, y, z);
   const merging = id === B.SLAB && current === B.SLAB;
   if (!merging && !isReplaceable(current)) return false;
-  if (IS_PLANT[id] && !supportsPlant(world.get(x, y - 1, z))) return false;
+  if (IS_PLANT[id] && !supportsPlant(world.getId(x, y - 1, z))) return false;
+  if (id === B.TORCH && !torchSupported(world, cell, value)) return false;
   if (merging) return !overlapsPlayer(cell, 1);
-  if (id === B.SLAB && world.get(x, y - 1, z) === B.SLAB) {
+  if (id === B.SLAB && world.getId(x, y - 1, z) === B.SLAB) {
     // Lands on the slab below and turns it into a double slab.
     return !overlapsPlayer({ x, y: y - 1, z }, 1);
   }
@@ -79,10 +102,10 @@ export function placeBlock(
   overlapsPlayer: (cell: Cell, height: number) => boolean,
 ): Cell | null {
   if (!canPlace(world, cell, id, overlapsPlayer)) return null;
-  if (id === B.SLAB && world.get(cell.x, cell.y, cell.z) === B.SLAB) {
+  if (id === B.SLAB && world.getId(cell.x, cell.y, cell.z) === B.SLAB) {
     return world.setBlock(cell.x, cell.y, cell.z, B.DOUBLE_SLAB) ? cell : null;
   }
-  const below = world.get(cell.x, cell.y - 1, cell.z);
+  const below = world.getId(cell.x, cell.y - 1, cell.z);
   if (!world.setBlock(cell.x, cell.y, cell.z, id)) return null;
   // setBlock merges a slab dropped onto a slab into the cell below.
   if (id === B.SLAB && below === B.SLAB) return { x: cell.x, y: cell.y - 1, z: cell.z };

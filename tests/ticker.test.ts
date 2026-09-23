@@ -2,11 +2,12 @@ import { describe, expect, it } from 'vitest';
 import { B } from '../src/world/blocks';
 import { MAX_UPDATES_PER_TICK, Ticker } from '../src/world/ticker';
 import type { World } from '../src/world/world';
-import { classicWorld } from './helpers';
+import { classicWorld, lightWorld } from './helpers';
 
 /** 32×32×32 world with a stone floor at y = 4 (top surface at y = 5). */
 function setup(): { w: World; t: Ticker } {
   const w = classicWorld(32, 32, 32, (_x, y) => (y <= 4 ? B.STONE : B.AIR), 7);
+  lightWorld(w);
   return { w, t: new Ticker(w) };
 }
 
@@ -75,6 +76,7 @@ describe('liquids', () => {
 
   it('caps the number of updates per tick', () => {
     const w = classicWorld(128, 16, 128, (_x, y) => (y === 0 ? B.STONE : B.AIR), 1);
+    lightWorld(w);
     const t = new Ticker(w);
     for (let z = 0; z < 128; z += 4) for (let x = 0; x < 128; x += 4) w.setBlock(x, 1, z, B.WATER);
     let peak = 0;
@@ -102,6 +104,7 @@ describe('liquids', () => {
     const sea = 8; // outside water fills y 6..7
     const w = classicWorld(16, 16, 16, (_x, y) => (y < sea + 2 ? B.STONE : B.AIR), 3);
     expect(w.seaLevel).toBe(sea);
+    lightWorld(w);
     const t = new Ticker(w);
     w.setBlock(0, sea - 1, 5, B.AIR);
     w.setBlock(1, sea - 1, 5, B.AIR);
@@ -114,6 +117,7 @@ describe('liquids', () => {
 describe('sponges', () => {
   it('clears water within 2 blocks and keeps it out until removed', () => {
     const w = classicWorld(32, 32, 32, (_x, y) => (y <= 4 ? B.STONE : y < 8 ? B.WATER : B.AIR), 7);
+    lightWorld(w);
     const t = new Ticker(w);
     w.setBlock(16, 6, 16, B.SPONGE);
     run(t, 100);
@@ -128,6 +132,19 @@ describe('sponges', () => {
     run(t, 100);
     expect(w.get(16, 6, 16)).toBe(B.WATER);
     expect(w.get(15, 5, 15)).toBe(B.WATER);
+  });
+});
+
+describe('simulation gating', () => {
+  it('does nothing in chunks that are not lit yet', () => {
+    const w = classicWorld(32, 32, 32, (_x, y) => (y <= 4 ? B.STONE : B.AIR), 7);
+    const t = new Ticker(w);
+    w.setBlock(10, 15, 10, B.SAND);
+    run(t, 40);
+    expect(w.get(10, 15, 10)).toBe(B.SAND); // still hanging: not loaded yet
+    lightWorld(w);
+    run(t, 80);
+    expect(w.get(10, 5, 10)).toBe(B.SAND);
   });
 });
 

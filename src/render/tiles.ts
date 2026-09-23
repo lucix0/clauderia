@@ -632,6 +632,21 @@ function sapling(t: Tile, rng: Rng): void {
   }
 }
 
+function torch(t: Tile): void {
+  t.clear();
+  const wood = hex('#7a5a33');
+  const dark = hex('#5a4124');
+  for (let y = 8; y <= 15; y++) {
+    t.set(7, y, y % 3 === 0 ? dark : wood);
+    t.set(8, y, dark);
+  }
+  // Glowing tip.
+  t.set(7, 6, hex('#fff7c2'));
+  t.set(8, 6, hex('#ffd24a'));
+  t.set(7, 7, hex('#ffb12e'));
+  t.set(8, 7, hex('#ff8a1c'));
+}
+
 function wool(t: Tile, rng: Rng, color: RGB): void {
   for (let y = 0; y < 16; y++) {
     for (let x = 0; x < 16; x++) {
@@ -687,6 +702,7 @@ export function paintTile(id: number): Uint8ClampedArray<ArrayBuffer> {
     case T.RED_MUSHROOM: mushroom(t, true); break;
     case T.BROWN_MUSHROOM: mushroom(t, false); break;
     case T.SAPLING: sapling(t, rng); break;
+    case T.TORCH: torch(t); break;
     default:
       if (id >= T.WOOL_FIRST && id < T.WOOL_FIRST + 16) wool(t, rng, WOOL_COLORS[id - T.WOOL_FIRST]!);
       else t.fill([255, 0, 255]);
@@ -728,6 +744,42 @@ export function paintClouds(size: number, seed: number): Uint8ClampedArray<Array
       out[i + 1] = 255;
       out[i + 2] = 255;
       out[i + 3] = v > 0.56 ? 215 : 0;
+    }
+  }
+  return out;
+}
+
+/** 16×16 sun: a bright square with a soft rim (drawn additively). */
+export function paintSun(): Uint8ClampedArray<ArrayBuffer> {
+  const out = new Uint8ClampedArray(16 * 16 * 4);
+  for (let y = 0; y < 16; y++) {
+    for (let x = 0; x < 16; x++) {
+      const d = Math.max(Math.abs(x - 7.5), Math.abs(y - 7.5));
+      const i = (y * 16 + x) * 4;
+      const core = d < 4.5;
+      const glow = Math.max(0, 1 - (d - 4) / 4);
+      out[i] = 255;
+      out[i + 1] = core ? 246 : 214;
+      out[i + 2] = core ? 196 : 120;
+      out[i + 3] = core ? 255 : Math.round(glow * glow * 150);
+    }
+  }
+  return out;
+}
+
+/** 16×16 moon: a pale square with a few craters. */
+export function paintMoon(): Uint8ClampedArray<ArrayBuffer> {
+  const out = new Uint8ClampedArray(16 * 16 * 4);
+  const craters = new Set(['6,5', '7,5', '6,6', '10,9', '9,10', '10,10', '5,10', '11,5']);
+  for (let y = 0; y < 16; y++) {
+    for (let x = 0; x < 16; x++) {
+      const i = (y * 16 + x) * 4;
+      if (x < 3 || x > 12 || y < 3 || y > 12) continue;
+      const c = craters.has(`${x},${y}`) ? 170 : 222 - ((x + y) % 3) * 6;
+      out[i] = c;
+      out[i + 1] = c;
+      out[i + 2] = c + 12;
+      out[i + 3] = 255;
     }
   }
   return out;

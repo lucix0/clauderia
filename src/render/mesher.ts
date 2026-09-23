@@ -1,15 +1,10 @@
 /**
- * Pure section mesher: turns one padded 16³ section into per-pass quad lists
- * with baked lighting. No three.js / DOM, so it is unit-testable and runs in
- * workers.
+ * Pure section mesher: turns one padded 16³ section into per-pass quad lists.
+ * Vertex colours carry the directional face shade; sky and block light go in
+ * their own per-vertex attributes so the shader can apply the time of day.
+ * No three.js / DOM, so it is unit-testable and runs in workers.
  */
-import {
-  SHADE_BOTTOM,
-  SHADE_TOP,
-  SHADE_X,
-  SHADE_Z,
-  SHADOW,
-} from '../config';
+import { SHADE_BOTTOM, SHADE_TOP, SHADE_X, SHADE_Z } from '../config';
 import {
   ATLAS_TILES_PER_ROW,
   B,
@@ -23,6 +18,8 @@ import {
   SHAPE_CROSS,
   SHAPE_NONE,
   SHAPE_SLAB,
+  SHAPE_TORCH,
+  TORCH_ATTACH,
 } from '../world/blocks';
 import { PAD, padIndex, type PaddedSection } from './padded';
 
@@ -31,8 +28,12 @@ export interface PassMesh {
   readonly positions: Float32Array;
   /** uv per vertex, atlas coordinates. */
   readonly uvs: Float32Array;
-  /** rgb per vertex, 0–255 in linear space (brightness only). */
+  /** rgb per vertex, 0–255 in linear space (face shade × tint). */
   readonly colors: Uint8Array;
+  /** Sky light per vertex, 0–255 (= level × 17). */
+  readonly sky: Uint8Array;
+  /** Block light per vertex, 0–255 (= level × 17). */
+  readonly block: Uint8Array;
   readonly quads: number;
 }
 
@@ -75,13 +76,9 @@ function toLinearByte(b: number): number {
   return Math.round(Math.min(1, lin) * 255);
 }
 
-/** [shadowed ? 1 : 0][face] → vertex colour byte. */
-const FACE_BYTES: readonly Uint8Array[] = [
-  Uint8Array.from(FACE_SHADE, (s) => toLinearByte(s)),
-  Uint8Array.from(FACE_SHADE, (s) => toLinearByte(s * SHADOW)),
-];
+/** Face → vertex colour byte (directional shade, linear). */
+const FACE_BYTES = Uint8Array.from(FACE_SHADE, (s) => toLinearByte(s));
 const FULL_BYTE = 255;
-const SPRITE_BYTES = [toLinearByte(1), toLinearByte(SHADOW)];
 
 /** Inset (in UV units) that keeps nearest sampling inside a tile. */
 const UV_INSET = 1 / (ATLAS_TILES_PER_ROW * 16 * 64);
@@ -104,6 +101,8 @@ class QuadBuffer {
   pos = new Float32Array(4 * 3 * 1024);
   uv = new Float32Array(4 * 2 * 1024);
   col = new Uint8Array(4 * 3 * 1024);
+  sky = new Uint8Array(4 * 1024);
+  blk = new Uint8Array(4 * 1024);
   quads = 0;
 
   reset(): void {
@@ -123,6 +122,27 @@ class QuadBuffer {
     const col = new Uint8Array(cap);
     col.set(this.col);
     this.col = col;
+    const sky = new Uint8Array(cap / 3);
+    sky.set(this.sky);
+    this.sky = sky;
+    const blk = new Uint8Array(cap / 3);
+    blk.set(this.blk);
+    this.blk = blk;
+  }
+
+  /** Light every vertex of quad q from a packed light byte. */
+  light(q: number, packed: number): void {
+    const s = (packed >> 4) * 17;
+    const b = (packed & 15) * 17;
+    const v = q * 4;
+    this.sky[v] = s;
+    this.sky[v + 1] = s;
+    this.sky[v + 2] = s;
+    this.sky[v + 3] = s;
+    this.blk[v] = b;
+    this.blk[v + 1] = b;
+    this.blk[v + 2] = b;
+    this.blk[v + 3] = b;
   }
 
   finish(): PassMesh | null {
@@ -132,6 +152,8 @@ class QuadBuffer {
       positions: this.pos.slice(0, q * 12),
       uvs: this.uv.slice(0, q * 8),
       colors: this.col.slice(0, q * 12),
+      sky: this.sky.slice(0, q * 4),
+      block: this.blk.slice(0, q * 4),
       quads: q,
     };
   }
@@ -147,10 +169,12 @@ function emitFace(
   z: number,
   tile: number,
   shade: number,
+  light: number,
   slab: boolean,
 ): void {
   buf.reserve();
   const q = buf.quads++;
+  buf.light(q, light);
   const pos = buf.pos;
   const uv = buf.uv;
   const col = buf.col;
@@ -190,7 +214,8 @@ const CROSS_QUADS: ReadonlyArray<readonly number[]> = (() => {
   return [d1, reverse(d1), d2, reverse(d2)];
 })();
 
-function emitCross(buf: QuadBuffer, x: number, y: number, z: number, tile: number, shade: number): void {
+function emitCross(buf: QuadBuffer, x: number, y: number, z: number, tile: number, light: number): void {
+  const shade = FULL_BYTE;
   const u0 = TILE_UVS[tile * 4]!;
   const v0 = TILE_UVS[tile * 4 + 1]!;
   const u1 = TILE_UVS[tile * 4 + 2]!;
@@ -201,6 +226,7 @@ function emitCross(buf: QuadBuffer, x: number, y: number, z: number, tile: numbe
     const flip = k % 2 === 1;
     buf.reserve();
     const q = buf.quads++;
+    buf.light(q, light);
     for (let c = 0; c < 4; c++) {
       const p = q * 12 + c * 3;
       buf.pos[p] = x + verts[c * 3]!;
@@ -215,6 +241,69 @@ function emitCross(buf: QuadBuffer, x: number, y: number, z: number, tile: numbe
       buf.col[p + 2] = shade;
     }
   }
+}
+
+const TORCH_FLOOR = 0;
+
+/**
+ * A torch: four thin planes through the middle of the cell using the full
+ * tile (only the 2-pixel stick is opaque), plus a small top cap. Wall
+ * torches sit low against the wall and lean away from it.
+ */
+function emitTorch(buf: QuadBuffer, x: number, y: number, z: number, tile: number, attach: number, light: number): void {
+  const [lx, lz] = TORCH_ATTACH[attach] ?? TORCH_ATTACH[0]!;
+  const u0 = TILE_UVS[tile * 4]!;
+  const v0 = TILE_UVS[tile * 4 + 1]!;
+  const u1 = TILE_UVS[tile * 4 + 2]!;
+  const v1 = TILE_UVS[tile * 4 + 3]!;
+  const du = (u1 - u0) / 16;
+  const dv = (v1 - v0) / 16;
+  const wall = attach !== TORCH_FLOOR;
+  const lift = wall ? 0.2 : 0;
+  // Offset toward the wall at the bottom, leaning out toward the top.
+  const place = (px: number, py: number, pz: number, out: number[]): void => {
+    const k = wall ? -0.36 + py * 0.42 : 0;
+    out.push(x + px + lx * k, y + py + lift, z + pz + lz * k);
+  };
+  const a = 7 / 16;
+  const b = 9 / 16;
+  const planes: number[][] = [
+    [a, 0, 0, a, 0, 1, a, 1, 1, a, 1, 0], // −X side
+    [b, 0, 1, b, 0, 0, b, 1, 0, b, 1, 1], // +X side
+    [1, 0, a, 0, 0, a, 0, 1, a, 1, 1, a], // −Z side
+    [0, 0, b, 1, 0, b, 1, 1, b, 0, 1, b], // +Z side
+  ];
+  const quad = (corners: number[], us: number[], vs: number[], both: boolean): void => {
+    const pts: number[] = [];
+    for (let c = 0; c < 4; c++) place(corners[c * 3]!, corners[c * 3 + 1]!, corners[c * 3 + 2]!, pts);
+    const orders = both ? [[0, 1, 2, 3], [1, 0, 3, 2]] : [[0, 1, 2, 3]];
+    for (const order of orders) {
+      buf.reserve();
+      const q = buf.quads++;
+      buf.light(q, light);
+      for (let c = 0; c < 4; c++) {
+        const src = order[c]!;
+        const p = q * 12 + c * 3;
+        buf.pos[p] = pts[src * 3]!;
+        buf.pos[p + 1] = pts[src * 3 + 1]!;
+        buf.pos[p + 2] = pts[src * 3 + 2]!;
+        buf.uv[q * 8 + c * 2] = us[src]!;
+        buf.uv[q * 8 + c * 2 + 1] = vs[src]!;
+        buf.col[p] = FULL_BYTE;
+        buf.col[p + 1] = FULL_BYTE;
+        buf.col[p + 2] = FULL_BYTE;
+      }
+    }
+  };
+  for (const pl of planes) quad(pl, [u0, u1, u1, u0], [v0, v0, v1, v1], true);
+  // Top cap at 10/16 showing the lit tip (tile pixels 7–8, rows 6–7).
+  const t = 10 / 16;
+  quad(
+    [a, t, b, b, t, b, b, t, a, a, t, a],
+    [u0 + 7 * du, u0 + 9 * du, u0 + 9 * du, u0 + 7 * du],
+    [v1 - 8 * dv, v1 - 8 * dv, v1 - 6 * dv, v1 - 6 * dv],
+    false,
+  );
 }
 
 /**
@@ -272,8 +361,11 @@ export function meshSection(pad: PaddedSection): ChunkMeshData {
 
         const buf = buffers[PASS[id]!]!;
         if (shape === SHAPE_CROSS) {
-          const lit = light[i]! >> 4 > 0;
-          emitCross(buf, x, y, z, FACE_TILES[id * 6 + 2]!, SPRITE_BYTES[lit ? 0 : 1]!);
+          emitCross(buf, x, y, z, FACE_TILES[id * 6 + 2]!, light[i]!);
+          continue;
+        }
+        if (shape === SHAPE_TORCH) {
+          emitTorch(buf, x, y, z, FACE_TILES[id * 6 + 2]!, value >> 8, light[i]!);
           continue;
         }
 
@@ -284,8 +376,8 @@ export function meshSection(pad: PaddedSection): ChunkMeshData {
           const nb = blocks[ni]! & 0xff;
           if (OCCLUDES[nb] && !(slab && f === 2)) continue;
           if (!faceVisible(id, shape, nb, f)) continue;
-          const shade = fullBright ? FULL_BYTE : FACE_BYTES[light[ni]! >> 4 > 0 ? 0 : 1]![f]!;
-          emitFace(buf, f, x, y, z, FACE_TILES[id * 6 + f]!, shade, slab);
+          const lightHere = fullBright ? (light[ni]! & 0xf0) | 15 : light[ni]!;
+          emitFace(buf, f, x, y, z, FACE_TILES[id * 6 + f]!, fullBright ? FULL_BYTE : FACE_BYTES[f]!, lightHere, slab);
         }
       }
     }
@@ -307,6 +399,3 @@ export function quadIndices(quads: number): Uint16Array | Uint32Array {
   }
   return indices;
 }
-
-/** Brightness byte used for a lit top face (exported for tests / sky). */
-export const LIT_TOP_BYTE = FACE_BYTES[0]![2]!;

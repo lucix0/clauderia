@@ -20,7 +20,7 @@ import { collisionWorld, Player } from './player/player';
 import type { RayHit } from './player/raycast';
 import { createAtlas, type Atlas } from './render/atlas';
 import { ChunkRenderer } from './render/chunks';
-import { createMaterials } from './render/materials';
+import { createMaterials, lightUniforms } from './render/materials';
 import { BlockOutline } from './render/outline';
 import { Sky, type Medium } from './render/sky';
 import { gunzip } from './save/compress';
@@ -40,7 +40,7 @@ import { loadSettings, sanitizeSettings, saveSettings, type Settings } from './u
 import { TitleScreen, type CreateWorldOptions } from './ui/title';
 import { randomSeed, seedFromString } from './util/prng';
 import { B, blockBounds, blockName, DEFAULT_HOTBAR, IS_SOLID, isValidBlock } from './world/blocks';
-import { breakBlock, placeBlock, placementTarget, type Cell } from './world/placement';
+import { breakBlock, placeBlock, placementTarget, placementValue, type Cell } from './world/placement';
 import type { World } from './world/world';
 
 const MOUSE_SCALE = 0.0022;
@@ -170,6 +170,9 @@ export class Game {
       save: () => void this.saveNow('manual'),
       quit: () => void this.quitToTitle(),
       settingsChanged: (s) => this.applySettings(s),
+      lockDaytime: (locked) => {
+        if (this.session) this.session.lockDaytime = locked;
+      },
     });
     this.menu.setSettings(this.settings);
     this.title = new TitleScreen(
@@ -501,6 +504,7 @@ export class Game {
     this.titleOverlay.classList.add('hidden');
     this.hud.setVisible(false);
     this.menu.setSettings(this.settings);
+    this.menu.setLockDaytime(this.session?.lockDaytime ?? false);
     this.menu.open();
     if (wasPlaying) void this.saveNow('autosave');
   }
@@ -671,6 +675,10 @@ export class Game {
         if (ok) this.chunks.rebuildAt(x, y, z);
         return ok;
       },
+      getTime: () => Math.floor(this.session?.time ?? 0),
+      setTime: (t) => {
+        if (this.session) this.session.time = t;
+      },
     };
     return ctx;
   }
@@ -686,8 +694,11 @@ export class Game {
       if (breakBlock(world, hit.x, hit.y, hit.z)) this.edited(hit);
     } else if (button === BUTTON_RIGHT) {
       const id = this.hotbar[this.selected] ?? B.AIR;
-      const cell = placementTarget(world, hit, [hit.nx, hit.ny, hit.nz], id);
-      const changed = placeBlock(world, cell, id, (c, h) => bodyOverlapsCell(this.player.body, c.x, c.y, c.z, h));
+      const normal = [hit.nx, hit.ny, hit.nz] as const;
+      const value = placementValue(id, normal);
+      if (value === null) return;
+      const cell = placementTarget(world, hit, normal, id);
+      const changed = placeBlock(world, cell, value, (c, h) => bodyOverlapsCell(this.player.body, c.x, c.y, c.z, h));
       if (changed) this.edited(changed);
     } else if (button === BUTTON_MIDDLE) {
       this.hotbar[this.selected] = hit.id;
@@ -786,7 +797,8 @@ export class Game {
     const distance = this.renderDistance;
     this.camera.far = distance + 256;
     this.camera.updateProjectionMatrix();
-    this.sky.update(dt, this.camera, this.cameraMedium(), distance);
+    this.sky.update(dt, this.camera, this.cameraMedium(), distance, this.session?.time ?? 6000);
+    lightUniforms.uDaylight.value = this.sky.daylight;
     this.resolveSpawn();
     if (this.streamer) {
       const dir = this.camera.getWorldDirection(this.tmpDir);
@@ -831,6 +843,7 @@ export class Game {
     // Block behaviours tick at 20 Hz on the same fixed clock.
     this.stepCount++;
     if (this.session && this.stepCount % STEPS_PER_TICK === 0) {
+      this.session.tickTime();
       this.session.ticker.setFocus(b.x, b.z);
       this.session.ticker.step();
     }
@@ -890,7 +903,18 @@ export class Game {
       streaming: this.streamer
         ? `${w?.chunks.size ?? 0} loaded, ${this.chunks.columnCount} meshed · workers ${this.pool.running}/${this.pool.size} busy, ${this.pool.queued} queued · mesh ${this.streamer.lastMeshMs.toFixed(1)} ms`
         : '—',
-      extra: [],
+      extra: w
+        ? [
+            (() => {
+              const ex = Math.floor(b.x);
+              const ey = Math.floor(b.y + PLAYER_EYE);
+              const ez = Math.floor(b.z);
+              const l = w.lightAt(ex, ey, ez);
+              const t = Math.floor(this.session?.time ?? 0);
+              return `Light: sky ${l >> 4}, block ${l & 15}   Time: ${t} (${formatClock(t)}) · daylight ${this.sky.daylight.toFixed(2)}${this.session?.lockDaytime ? ' · locked' : ''}`;
+            })(),
+          ]
+        : [],
     });
   }
 
@@ -927,4 +951,10 @@ export function groundHeight(world: World, x: number, z: number): number {
     }
   }
   return world.seaLevel + 1;
+}
+
+/** Ticks → a 24-hour clock (0 ticks = 06:00). */
+export function formatClock(ticks: number): string {
+  const minutes = Math.floor((((ticks / 1000 + 6) % 24) + 24) % 24 * 60);
+  return `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`;
 }

@@ -7,6 +7,7 @@ export interface MenuActions {
   save(): void;
   quit(): void;
   settingsChanged(settings: Settings): void;
+  lockDaytime(locked: boolean): void;
 }
 
 type PanelName = 'main' | 'settings';
@@ -32,6 +33,7 @@ export class PauseMenu {
   private readonly fovValue: HTMLElement;
   private readonly distance: HTMLSelectElement;
   private readonly invert: HTMLInputElement;
+  private readonly lockDay: HTMLInputElement;
   private readonly info: HTMLElement;
   private current: PanelName = 'main';
 
@@ -73,6 +75,8 @@ export class PauseMenu {
       input.addEventListener('input', () => this.emitSettings());
       input.addEventListener('change', () => this.emitSettings());
     }
+    this.lockDay = el('input', { attrs: { id: 'set-lockday', type: 'checkbox' } });
+    this.lockDay.addEventListener('change', () => this.actions.lockDaytime(this.lockDay.checked));
     const settingsPanel = el('div', { className: 'menu-panel' }, [
       el('h2', { className: 'panel-heading', text: 'Settings' }),
       el('label', { className: 'form-row', attrs: { for: 'set-sens' } }, [
@@ -83,6 +87,10 @@ export class PauseMenu {
       el('label', { className: 'form-row', attrs: { for: 'set-fov' } }, [el('span', { text: 'Field of view' }), this.fov, this.fovValue]),
       el('label', { className: 'form-row', attrs: { for: 'set-dist' } }, [el('span', { text: 'Render distance' }), this.distance]),
       el('label', { className: 'form-row', attrs: { for: 'set-invert' } }, [el('span', { text: 'Invert mouse Y' }), this.invert]),
+      el('label', { className: 'form-row', attrs: { for: 'set-lockday' } }, [
+        el('span', { text: 'Lock daytime (this world)' }),
+        this.lockDay,
+      ]),
       el('div', { className: 'btn-row' }, [button('Back', () => this.showPanel('main'), 'btn btn-primary')]),
     ]);
 
@@ -121,6 +129,10 @@ export class PauseMenu {
 
   setInfo(text: string): void {
     this.info.textContent = text;
+  }
+
+  setLockDaytime(locked: boolean): void {
+    this.lockDay.checked = locked;
   }
 
   setCanSave(canSave: boolean): void {
