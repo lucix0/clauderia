@@ -725,8 +725,13 @@ try {
   const far = await inf.evaluate(async () => {
     const g = window.__game;
     g.command('/tp -100000 100 -100000');
-    await new Promise((r) => setTimeout(r, 4000));
-    return { fraction: g.streamer.meshedFraction(-6250, -6250, 2), chunks: g.currentWorld.chunks.size };
+    // Wait until the 5×5 columns around the player are meshed (software GL is slow; allow 30 s).
+    const t0 = performance.now();
+    while (performance.now() - t0 < 30_000 && g.streamer.meshedFraction(-6250, -6250, 2) < 1) {
+      await new Promise((r) => setTimeout(r, 250));
+    }
+    const seconds = Math.round((performance.now() - t0) / 100) / 10;
+    return { fraction: g.streamer.meshedFraction(-6250, -6250, 2), seconds, chunks: g.currentWorld.chunks.size };
   });
   check(far.fraction === 1, 'terrain streams in 100k blocks from the origin', JSON.stringify(far));
   await inf.screenshot({ path: `${OUT}/smoke-far.png` });
