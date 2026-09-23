@@ -119,8 +119,10 @@ export class Input {
   private keyDown(e: KeyboardEvent): void {
     const typing = e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement;
     if (typing) return;
-    if (e.code === 'F3' || e.code === 'Space' || (this.locked && e.code.startsWith('Digit'))) e.preventDefault();
-    if (this.locked && (e.code === 'Tab' || e.code === 'Slash' || e.code === 'Quote')) e.preventDefault();
+    if (e.code === 'F3') e.preventDefault();
+    if (this.locked && (e.code === 'Space' || e.code.startsWith('Digit') || e.code === 'Tab' || e.code === 'Slash' || e.code === 'Quote')) {
+      e.preventDefault();
+    }
     if (!e.repeat) this.handlers.onKeyDown?.(e.code, e);
     if (this.locked) this.keys.add(e.code);
   }

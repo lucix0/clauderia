@@ -8,6 +8,7 @@ import {
   REMESH_BUDGET_MS,
   RENDER_DISTANCES,
   STEP_DT,
+  STEPS_PER_TICK,
 } from './config';
 import { BUTTON_LEFT, BUTTON_MIDDLE, BUTTON_RIGHT, Input } from './player/input';
 import { bodyOverlapsCell, type CollisionWorld } from './player/physics';
@@ -35,6 +36,7 @@ import { generateAsync } from './world/generate';
 import { findSpawn } from './world/generator';
 import { breakBlock, placeBlock, placementTarget, type Cell } from './world/placement';
 import { WORLD_SIZES, type WorldSizeName } from './world/sizes';
+import { Ticker } from './world/ticker';
 import { World } from './world/world';
 
 const MOUSE_SCALE = 0.0022;
@@ -82,6 +84,8 @@ export class Game {
   onWorldReady: () => void = () => {};
   private world: World | null = null;
   private collision: CollisionWorld | null = null;
+  private ticker: Ticker | null = null;
+  private stepCount = 0;
   private accumulator = 0;
   private lastTime = 0;
   private readonly repeatAt = [0, 0, 0];
@@ -320,8 +324,11 @@ export class Game {
   }
 
   private async installWorld(world: World): Promise<void> {
+    this.ticker?.dispose();
     this.world = world;
     this.collision = collisionWorld(world);
+    this.ticker = new Ticker(world);
+    this.stepCount = 0;
     this.target = null;
     this.outline.set(null);
     this.sky.setWorld(world);
@@ -647,6 +654,9 @@ export class Game {
       dt,
     );
     if (this.player.body.y < -32) this.player.respawn();
+    // Block behaviours tick at 20 Hz on the same fixed clock.
+    this.stepCount++;
+    if (this.ticker && this.stepCount % STEPS_PER_TICK === 0) this.ticker.step();
   }
 
   private cameraMedium(): Medium {
@@ -694,7 +704,9 @@ export class Game {
       triangles: info.triangles,
       world: w ? `${w.sx}×${w.sy}×${w.sz} seed ${w.seed}` : '—',
       mode: `${b.flying ? 'flying' : b.liquid === 1 ? 'swimming' : b.liquid === 2 ? 'in lava' : 'walking'}${b.onGround ? ', on ground' : ''} · view ${RENDER_DISTANCES[this.settings.renderDistance]!.name}`,
-      tick: 'static',
+      tick: this.ticker
+        ? `#${this.ticker.tick}  ${this.ticker.lastUpdates} updates/tick  ${this.ticker.pending} queued`
+        : '—',
     });
   }
 

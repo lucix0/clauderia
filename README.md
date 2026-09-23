@@ -91,6 +91,16 @@ one axis at a time against slab-aware boxes (no tunnelling, no wall sticking),
 slower movement in liquids, fly mode. Targeting is a voxel DDA raycast with 5-block
 reach and an outline around the target's bounds.
 
+**Block behaviours** — A 20 Hz tick on the same fixed clock drives the Classic
+rules: sand and gravel fall; water and lava spread without limit into air (down
+and sideways, lava six times slower), with at most 400 scheduled updates per tick
+so a flood can never stall a frame (the backlog simply waits); where water and
+lava meet the flow hardens into stone; digging into the map edge below sea level
+lets the outer ocean pour in; sponges clear water within 2 blocks and keep it out
+until removed; saplings grow into trees; grass spreads onto lit dirt and dies
+when a light-blocking block covers it. Updates are event-driven (a change wakes
+only the neighbours that can react) plus a few random surface-column ticks.
+
 **UI & saving** — Crosshair, 9-slot hotbar, block picker, pause menu with Save /
 Load / New World (size + seed; text seeds are hashed) / Settings (sensitivity, FOV,
 render distance, invert Y — persisted in `localStorage`), F3 overlay. Saves are a
@@ -111,6 +121,7 @@ src/
   render/   tiles.ts (pixel painters), atlas.ts, mesher.ts, chunks.ts,
             materials.ts, sky.ts, outline.ts
   player/   input.ts, physics.ts, raycast.ts, player.ts
+            ticker.ts (M5 block behaviours)
   ui/       hud.ts, icons.ts, picker.ts, menu.ts, loading.ts, debug.ts,
             settings.ts, dom.ts
   save/     serialize.ts, compress.ts, storage.ts
@@ -118,8 +129,8 @@ tests/      unit tests for the pure modules
 scripts/    smoke.mjs (Playwright)
 ```
 
-The mesher, raycast, physics, generator, tile painters, placement rules and
-save serialisation are pure (no three.js, no DOM) and unit-tested. Every block
+The mesher, raycast, physics, generator, ticker, tile painters, placement rules
+and save serialisation are pure (no three.js, no DOM) and unit-tested. Every block
 change goes through `World.setBlock`, which updates the light height map, marks
 dirty chunks and applies neighbour effects.
 
@@ -130,7 +141,10 @@ adjacent cubes → 10 faces, same-type transparent culling, slabs, sprites, bake
 shading), raycast hit block and face (including slabs and plants), collision
 (landing, no tunnelling, walls, map edges, ceilings, jump height, slab step-up,
 swimming, flying, can't place inside yourself), save round-trip (with gzip),
-determinism (same seed → identical world) and spawn on dry land.
+determinism (same seed → identical world), spawn on dry land, and the block
+behaviours (falling sand, unlimited water spread, slower lava, the per-tick cap,
+water + lava → stone, edge-ocean inflow, sponges, sapling growth, grass spread and
+death).
 
 `npm run smoke` builds, serves `dist/` with `vite preview`, opens `?debug` in
 headless Chromium (software GL via SwiftShader), fails on any console error, walks,
@@ -163,6 +177,17 @@ Things the brief left open, and what I chose:
   Mouse presses within 200 ms of gaining lock are ignored, so the resuming click
   never breaks or places.
 - **Saving** uses one slot. `?debug` never saves or loads.
+- **Liquids** follow the Classic "unlimited" rule literally: a source placed in
+  mid-air spreads sideways forever as well as down, so it floods the map at that
+  level. Water meeting lava turns the contact cell to stone (not in the brief, but
+  it keeps the two from sitting side by side forever).
+- **Grass** counts as covered when the block directly above blocks light (so a
+  slab or dirt kills it, glass doesn't). Dirt turns green when sunlight reaches
+  it and grass is within the 3×5×3 neighbourhood Classic used; saplings need
+  sunlight, grass/dirt below and room for the canopy.
+- **Timings**: water spreads a block every 0.25 s, lava every 1.5 s, sand falls
+  10 blocks/s; placed saplings try to grow after 5–20 s, covered grass dies after
+  2–6 s and exposed dirt near grass greens after 3–10 s.
 
 ## Known issues
 
@@ -171,6 +196,8 @@ Things the brief left open, and what I chose:
   (≈1 ms per chunk remesh, ~200 draw calls at Far) — not a real integrated GPU.
 - Translucent water is sorted per chunk, not per face; looking through two water
   surfaces at once can occasionally blend in the wrong order.
+- Pending block updates aren't saved: a flood or falling sand that was mid-way
+  when you saved sits still after loading until something next to it changes.
 - `beforeunload` saves are best-effort (IndexedDB writes can be cut off when the
   tab closes); the 60 s autosave and the save on pause are the reliable ones.
 

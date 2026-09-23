@@ -10,9 +10,9 @@ const PITCH_LIMIT = Math.PI / 2 - 0.001;
 export function collisionWorld(world: World): CollisionWorld {
   return {
     solidHeight(x, y, z) {
-      if (y < 0) return 1;
+      // The map edges are walls all the way up, and there is a floor below it.
+      if (x < 0 || z < 0 || x >= world.sx || z >= world.sz || y < 0) return 1;
       if (y >= world.sy) return 0;
-      if (x < 0 || z < 0 || x >= world.sx || z >= world.sz) return 1;
       return collisionHeight(world.blocks[(y * world.sz + z) * world.sx + x]!);
     },
     liquidAt(x, y, z) {

@@ -60,6 +60,14 @@ describe('player collision', () => {
     expect(body.x).toBeCloseTo(0.3, 5);
   });
 
+  it('cannot fly out over the edge above the world either', () => {
+    const w = floorWorld();
+    const body = createBody(1.5, 40, 10.5);
+    body.flying = true;
+    run(w, body, { ...idle, strafe: -1 }, 2);
+    expect(body.x).toBeCloseTo(0.3, 5);
+  });
+
   it('jumps about 1.25 blocks', () => {
     const w = floorWorld();
     const body = createBody(10.5, 5, 10.5);
