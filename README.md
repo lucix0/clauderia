@@ -2,10 +2,11 @@
 
 A single-player block sandbox for the browser: endless procedurally generated
 worlds with biomes, rivers, caves and ores, a day/night cycle with flood-fill
-lighting, and a survival mode with hunger, crafting, smelting, finite fluids
-and mobs. The original fixed-size "Classic" worlds are still there. Every
-texture, model and icon is generated in code at startup; there are no assets,
-no backend and no network access.
+and smooth lighting, and a survival mode with hunger, crafting, smelting,
+farming, finite fluids, mobs, a bow and beds. The original fixed-size
+"Classic" worlds are still there. Every texture, model, icon and sound is
+generated in code at startup; there are no assets, no backend and no network
+access.
 
 Built with Vite + TypeScript (strict) + three.js, the only runtime dependency.
 
@@ -48,9 +49,10 @@ converted into a Classic world automatically.
 | Mouse | Look |
 | `W` `A` `S` `D` | Move; double-tap `W` to sprint |
 | `Space` | Jump; swim up; fly up |
-| `Shift` | Sneak (lower eyes, slower, won't walk off edges); fly down |
+| `Shift` | Sneak (lower eyes, slower, won't walk off edges, hold still on a ladder); fly down |
 | Left click | Survival: hold to mine (a crack shows progress), hit mobs. Creative: break instantly (hold to repeat) |
-| Right click | Place the held block; use a crafting table, furnace or chest (sneak to place against them instead); hold to eat food; buckets scoop / pour; bone meal grows saplings |
+| Right click | Place the held block; use a crafting table, furnace, chest, door or bed (sneak to place against them instead); hold to eat food; buckets scoop / pour; a hoe tills grass or dirt; seeds sow farmland; bone meal grows saplings and crops |
+| Hold right click with a bow | Draw (the view zooms in); let go to shoot. Survival needs arrows |
 | Middle click | Creative: copy the block into the selected slot. Survival: select it if it's on the hotbar |
 | `1`–`9`, mouse wheel | Select hotbar slot |
 | `E` | Survival: inventory with a 2×2 crafting grid. Creative: every block and item |
@@ -61,7 +63,10 @@ converted into a Classic world automatically.
 | `F` | Cycle render distance (4, 6, 8, 12, 16 chunks) |
 | `/` | Command bar |
 | `F3` | Debug overlay |
-| `Esc` | Pause menu: resume, save, settings, save & quit to the title screen |
+| `Esc` | Pause menu: resume, save, settings (mouse, field of view, render distance, smooth lighting, sound volume), save & quit to the title screen |
+
+Walk into a ladder (or jump) to climb it. Sound starts with the click that
+captures the mouse.
 
 In inventory screens: left click picks up / puts down / swaps a stack, right
 click picks up half or puts down one, shift-click moves a stack to the other
@@ -140,33 +145,70 @@ remeshes anything. Torch light is warm, moonlight slightly blue.
 through dusk and dawn, fog that follows the sky. The time is saved per
 world; a world can lock daytime (pause menu).
 
-**Blocks.** 67 blocks, including sandstone, snow block and snow layer,
+**Smooth lighting.** On by default (Settings): every face corner averages the
+light of the four cells in front of it and darkens with ambient occlusion
+where blocks meet, with the quad split along the smoother diagonal. Turning
+it off remeshes everything with flat per-face light.
+
+**Blocks.** 73 blocks, including sandstone, snow block and snow layer,
 translucent ice, cactus (inset, and it hurts), dead bush, tall grass, clay,
 spruce and birch logs / leaves / planks, diamond ore and block, crafting
-table, furnace and chest. Block states: log axis, torch attachment, furnace
-facing and lit, fluid level. Grass, leaves, tall grass and water take their
-colour from the biome.
+table, furnace, chest, bed, farmland, wheat, door, ladder and fence. Block
+states: log axis, torch and ladder attachment, facing (furnace, chest, bed,
+door), furnace lit, door open, crop stage, moist farmland, fluid level,
+persistent (placed) leaves. Grass, leaves, tall grass and water take their
+colour from the biome. Leaves more than four blocks from a log of their tree
+decay (dropping saplings and apples); placed leaves never do.
+
+**Doors, ladders, fences.** Their geometry comes from one module used for
+drawing, collision and targeting. Doors are two tall, face away from you,
+swing open to your left with a click and block mobs. Ladders hang on walls;
+walking into one climbs it, sneaking holds on and letting go slides down
+slowly without fall damage. Fences join each other and solid blocks and are
+1.5 blocks tall to collide with, so they can't be jumped.
 
 **Survival.** 20 health, 20 hunger (with saturation and exhaustion) and 10 air
 bubbles. Sprinting, jumping, mining and healing cost hunger; health
 regenerates when well fed and starving stops at half a heart. Damage from
 falls (over 3 blocks), drowning, lava (with lingering fire that water puts
-out), cacti, suffocation and mobs, with a moment of invulnerability,
+out), cacti, suffocation, mobs and arrows, with a moment of invulnerability,
 knockback, a red flash and a camera shake. Dying shows a death screen; your
-inventory spills where you fell and you respawn at the world spawn.
+inventory spills where you fell and you respawn at your bed, or the world
+spawn if you have none (or it's gone).
+
+**Beds.** Using a bed makes it your respawn point. At night, with no monsters
+within 8 blocks, you sleep: the view fades out and the clock jumps to sunrise.
+Taking damage or leaving the game wakes you.
+
+**Farming.** A hoe tills grass or dirt into farmland, which is moist within
+four blocks of water, dries away from it, and turns back to dirt when bare
+for a while or covered. Wheat seeds (from tall grass) grow through eight
+stages when lit, twice as often on moist soil, both on a timer and on random
+ticks; bone meal pushes them two to four stages. Ripe wheat gives wheat and
+one to three seeds, three wheat make bread. Crops pop off when their soil
+goes and wash away in water.
+
+**Bow.** Hold right click to draw (a full draw takes a second, and the view
+zooms in), let go to shoot. Arrows arc under gravity, damage (up to 4.5
+hearts) and knock back mobs, and stick in blocks. In Survival each shot uses
+an arrow and wears the bow, and you can walk over your stuck arrows to take
+them back.
 
 **Items, mining and crafting.** Items are separate from blocks: sticks, coal,
 charcoal, iron and gold ingots, diamonds, apples, raw and cooked pork and
-beef, bones, bone meal, string and buckets, plus pickaxes, axes, shovels and
-swords in wood, stone, iron, gold and diamond. Stacks of 64; tools stack
-alone and wear out. Mining time depends on the block's hardness and the tool;
+beef, bread, wheat and wheat seeds, bones, bone meal, string, flint, arrows,
+a bow and buckets, plus pickaxes, axes, shovels, swords and hoes in wood,
+stone, iron, gold and diamond. Stacks of 64; tools and the bow stack alone
+and wear out. Mining time depends on the block's hardness and the tool;
 some drops need a good enough pickaxe (iron needs stone, gold and diamond
 need iron). Stone drops cobblestone, grass dirt, leaves sometimes a sapling or
-an apple, glass nothing. Recipes are data (shaped, anywhere in the grid and
-mirrored; shapeless; tags such as "any planks"): planks, sticks, crafting
-table, torches, every tool, furnace, chest, bucket, storage blocks, white
-wool from string, bone meal, sandstone, slabs. Sponge, bedrock and coloured
-wool are Creative-only.
+an apple, gravel sometimes flint, tall grass sometimes seeds, glass nothing.
+Recipes are data (shaped, anywhere in the grid and mirrored; shapeless; tags
+such as "any planks" or "any wool"): planks, sticks, crafting table, torches,
+every tool, furnace, chest, bucket, storage blocks, white wool from string,
+bone meal, sandstone, slabs, bread, a bow (sticks and string), arrows (flint
+on a stick), a bed (wool over planks), doors, ladders and fences. Sponge,
+bedrock and coloured wool are Creative-only.
 
 **Furnaces, chests, fluids.** Furnaces burn fuel and smelt ores into ingots,
 sand into glass, cobblestone into stone, logs into charcoal, clay into bricks
@@ -194,9 +236,15 @@ and walking animations — original designs, not copies. Hit them with
 whatever's in your hand; they flash, get knocked back, topple over and drop
 loot. Peaceful has no hostile mobs.
 
+**Sound.** Procedural WebAudio, no samples: footsteps and landings by the
+material underfoot, digging, breaking and placing, splashes, eating, pickups,
+swings, hurt, doors, the bow, arrows landing, and mob voices (idle grunts,
+moos, bleats, groans, rattles and hisses, plus hurt and death). Sounds in the
+world fade with distance and pan with their direction. Volume is in Settings.
+
 **Saving.** IndexedDB (`blocktide`, version 2): a world record (name, seed,
 type, size, game mode, difficulty, time, daytime lock, spawn, player with
-inventory and vitals) and one gzipped binary record per changed chunk
+inventory, vitals and bed) and one gzipped binary record per changed chunk
 (blocks when they differ from generation, plus JSON for block entities,
 dropped items and animals). Writes are batched into one transaction; chunks
 are saved when they unload, when the game pauses, every minute and when
@@ -208,14 +256,16 @@ quitting to the title screen.
 src/
   main.ts, game.ts (loop, input, glue), session.ts (a loaded world + saving), config.ts
   world/     coords, chunk, world (storage, setBlock), blocks (registry), light, lightRegion,
-             fluids, blockEntities, ticker (block behaviours), placement, trees,
-             generator / heightmap / generate (Classic), gen/biomes + gen/infinite
+             fluids, blockEntities, ticker (block behaviours), placement, trees, farming,
+             shapes (doors, ladders, fences), generator / heightmap / generate (Classic),
+             gen/biomes + gen/infinite
   stream/    streamer (what to generate, light, mesh, upload, unload)
   workers/   pool, protocol, chunk.worker (generate / light / mesh jobs)
   render/    tiles + itemTiles (pixel painters), atlas, mesher, meshInput, padded, chunks,
              materials (voxel light shader), sky, crack, outline
   items/     items (registry), inventory, recipes, smelting, container (screen logic)
-  survival/  vitals, mining, survivor (the survival player)
+  survival/  vitals, mining, survivor (the survival player), bow, sleep
+  audio/     sound (procedural WebAudio)
   entities/  items (dropped items), mobs (mobs, AI, spawning, arrows), models,
              mobTextures, itemRender, mobRender
   player/    input, physics (shared by the player, items and mobs), raycast, player
@@ -234,20 +284,25 @@ without support).
 
 ## Tests
 
-`npm test` (≈170 tests) covers, among others: negative-coordinate math and chunk
+`npm test` (≈205 tests) covers, among others: negative-coordinate math and chunk
 keys; that the same seed gives identical chunks and that a 3×3 area generated
 in two different orders is identical; continuous heights across chunk and
 biome borders; biome variety and `/locatebiome`; trees crossing chunk borders;
 ore depths; light spreading and incremental removal across chunk borders
 (checked against a full recompute); meshing (culling, slabs, snow layers,
-cacti, rotated logs, tints, light attributes); recipe matching (offset,
+cacti, rotated logs, tints, light attributes, ambient occlusion, bed pillows
+facing the right way, fence rails); recipe matching (offset,
 mirrored, shapeless, tags) and crafting through the container; inventory
 stack operations; mining times and tier-gated drops; fall damage, drowning,
 burning, cactus, starvation and regeneration timers; eating; finite fluid
 spread, drying, drops, new sources and lava/water reactions; furnace smelting
 and fuel use; block entity and save v2 round trips and the v1 migration;
 item entities; sneaking at edges; mob combat, AI, archery, spawning rules,
-sunlight and saving; commands.
+sunlight and saving; leaf decay; tilling, sowing, crop growth and light,
+farmland drying; bow draw, arrow use and hits; bed placement, breaking,
+sleeping rules and the saved respawn point; doors (placing, toggling, blocking
+the way), fences (can't be jumped), ladders (climbing, holding, sliding);
+sound attenuation and panning (on a fake AudioContext); commands.
 
 `npm run smoke` builds, serves `dist/` and drives headless Chromium (software
 GL through SwiftShader), failing on any console error. It checks a Classic
@@ -255,8 +310,11 @@ world (walking, breaking, placing, F3, underwater fog, the creative
 inventory), then an Infinite world: noon and midnight, a torch-lit cave,
 every biome found with `/locatebiome` and photographed, a survival round
 (crafting planks, sticks and a pickaxe through the screens, mining with
-pickup, fall damage, a bucket, death and respawn), every mob lined up and a
-night fight with a zombie, streaming while flying and 100 000 blocks out;
+pickup, fall damage, a bucket, placing a bed and sleeping till morning,
+tilling, sowing, bone meal and harvesting wheat, a hut with a door, ladder
+and fences, death and respawn at the bed), every mob lined up, a night fight
+with a zombie and a bow shot at a pig, streaming while flying and 100 000
+blocks out;
 then the title screen (create, save & quit, reload, delete), an Infinite world
 whose edits, chest contents and dropped items survive unloading and a reload,
 and the v1 save migration. Screenshots land in `artifacts/`. Set
@@ -264,8 +322,8 @@ and the v1 save migration. Screenshots land in `artifacts/`. Set
 `npx playwright install chromium` once.
 
 `npm run bench` measures single-threaded generation, lighting and meshing
-throughput (at the time of writing: ~560 chunks/s generated including the
-biome data of their neighbours, ~300 lit, ~1000 meshed).
+throughput (at the time of writing: ~550 chunks/s generated including the
+biome data of their neighbours, ~290 lit, ~760 meshed with smooth lighting).
 
 ## Judgement calls
 
@@ -304,6 +362,19 @@ Things the brief left open, and what I chose:
   unloaded chunks doesn't count).
 - **Liquids** can't be targeted except by buckets; blocks can be placed into
   them.
+- **Arrows** are flint on a stick (no birds, so no feathers). A full draw
+  does 9 damage; stuck player arrows last a minute, skeletons' eight seconds.
+- **Beds** respawn you on top of the bed. Sleeping works from dusk (tick
+  12 500) to just before sunrise and wakes you at sunrise; there's no lying
+  down animation, just the fade.
+- **Crops** grow in roughly two minutes on moist soil (about twice that dry):
+  quicker than you might expect, since a play session is short.
+- **Doors** always hinge on the left as seen when placing them; there are no
+  double doors or fence gates. Zombies don't open doors.
+- **Smooth lighting** only applies to full cubes; slabs, plants, fluids and
+  shaped blocks keep flat light.
+- **Sound** is deliberately simple synthesis (filtered noise and a few
+  oscillators); nothing plays until you click into the game.
 - **Pointer lock**: Chrome refuses to re-lock for about a second after `Esc`;
   when that happens the "Click to play" overlay comes back and the next click
   works. `?debug` just carries on unlocked.
@@ -319,16 +390,22 @@ Things the brief left open, and what I chose:
   in view cost a few hundred draw calls.
 - Translucent water is sorted per column, not per face, so looking through
   two water surfaces can occasionally blend in the wrong order.
-- Pending block updates (a flowing fluid, falling sand) aren't saved; they
-  resume when something next to them changes.
+- Pending block updates (a flowing fluid, falling sand, a crop's next growth
+  step) aren't saved; they resume when something next to them changes, and
+  crops and farmland also carry on through random ticks.
+- Arrows in flight or stuck in blocks aren't saved.
+- Mobs path around by feel (they hop steps and avoid drops) and don't know
+  about doors or fences, so a zombie can get stuck against a closed door.
 - Water doesn't push the player or items along its flow.
 - `pagehide` saves are best-effort; the autosave every minute, the save on
   pause and "Save & quit" are the reliable ones.
 
 ## Next steps
 
-- Smooth lighting / ambient occlusion, leaf decay, farming, a bow, beds,
-  doors / ladders / fences and procedural sound (the stretch list).
 - Merge mob parts into one skinned geometry per mob; instanced items.
+- Real pathfinding for mobs (around fences, through open doors).
+- Fence gates, trapdoors and double doors; more crops (carrots, potatoes)
+  and animal breeding with wheat.
 - Corner-smoothed fluid surfaces and currents.
 - Greedy meshing for distant columns; occlusion culling for caves.
+- Save arrows and pending block updates with their chunk.

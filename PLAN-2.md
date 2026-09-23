@@ -192,3 +192,29 @@ milestone.
   swords 4–7), knockback, half a second of invulnerability, 0.25 s between
   swings; mob reach 3.5 blocks, checked before blocks. Hostiles also spawn in
   Creative but ignore the player; Peaceful removes them.
+- **M8 stretch** (after M1–M7 were in and green):
+  - Smooth lighting: per-corner average of the four cells in front of a face
+    (a corner hidden by both side cells doesn't count), ambient occlusion
+    levels 0–3 at 0.5 / 0.68 / 0.84 / 1 brightness, the quad split along the
+    smoother diagonal. Full cubes only; a setting (default on) that remeshes.
+  - Leaf decay: leaves not within 4 steps (through leaves) of a log decay on
+    a scheduled update after a log or leaf nearby goes; placed leaves carry a
+    persistent bit.
+  - Sound: WebAudio synthesis only (noise bursts through filters, a few
+    oscillators); distance fade over 28 blocks and stereo pan; the
+    AudioContext is created on a user gesture.
+  - Bow: draw power (t² + 2t) / 3 over one second, speed 12–40 blocks/s,
+    damage 1–9; arrows need flint (gravel 10%) on a stick. Survival shots use
+    arrows and wear the bow (384 uses).
+  - Beds: two cells, placed away from the player; the respawn point is the
+    foot cell (saved with the player, verified when its chunk loads); sleep
+    from tick 12 500 to 23 500 with no hostile within 8 blocks, 2.2 s fade,
+    wake at tick 0.
+  - Farming: hoes as a fifth tool kind (appended, so older tool ids are
+    unchanged); farmland moist within 4 blocks of water; wheat grows on
+    scheduled updates (every 15–45 s) and 10% of random ticks, needing light
+    9, always on moist soil and half the time on dry; bread from 3 wheat.
+  - Doors, ladders and fences: geometry in shapes.ts shared by the mesher,
+    physics (collision worlds may return per-cell boxes; fences are 1.5 tall)
+    and the targeting ray. Ladders reuse the wall-torch attachment states and
+    make the body climb (2.4 blocks/s up, at most 2.5 down, sneak holds).
