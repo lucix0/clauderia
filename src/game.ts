@@ -72,7 +72,8 @@ import {
 } from './world/blocks';
 import { BIOME, BIOME_KEYS, BIOMES } from './world/gen/biomes';
 import { infiniteGenerator } from './world/gen/infinite';
-import { breakBlock, placeBlock, placementTarget, placementValue, type Cell } from './world/placement';
+import { bedFoot, breakBlock, placeBed, placeBlock, placementTarget, placementValue, type Cell } from './world/placement';
+import { canSleepAt, monstersNear, SLEEP_FADE_S, SLEEP_S, WAKE_TIME } from './survival/sleep';
 import type { Chunk } from './world/chunk';
 import type { World } from './world/world';
 
@@ -174,6 +175,12 @@ export class Game {
   private sneakDrop = 0;
   private fovKick = 0;
   private bowZoom = 0;
+  /** Seconds asleep (−1 awake), and the fade back in after waking. */
+  private sleep = -1;
+  private wakeFade = 0;
+  /** Foot of the bed the player respawns at; check it's still there on arrival. */
+  private bed: Cell | null = null;
+  private bedCheck = false;
   /** Footstep bookkeeping: distance walked since the last step, highest point of the current fall. */
   private stepDistance = 0;
   private airPeak = 0;
@@ -250,6 +257,7 @@ export class Game {
         this.hud.hurt();
         this.hurtShake = 1;
         this.sound.hurt();
+        this.sleep = -1;
       },
       died: (cause) => this.onDeath(cause),
       inventory: () => this.hud.render(this.survivor.inventory, this.survivor.selected),
@@ -518,7 +526,7 @@ export class Game {
   private playerRecord(): PlayerRecord {
     const s = this.player.getState();
     const surv = this.survivor.toJSON();
-    return { ...s, hotbar: this.hotbar, selected: this.survivor.selected, vitals: surv.vitals, inventory: surv.inventory };
+    return { ...s, hotbar: this.hotbar, selected: this.survivor.selected, vitals: surv.vitals, inventory: surv.inventory, bed: this.bed };
   }
 
   /** Hotbar item ids (0 for empty slots). */
@@ -613,6 +621,9 @@ export class Game {
     this.survivor.mode = session.record.gameMode;
     this.survivor.difficulty = session.record.difficulty;
     this.survivor.respawn();
+    this.bed = p?.bed ?? null;
+    this.bedCheck = false;
+    this.sleep = -1;
     if (p) {
       this.player.setState(p);
       this.survivor.load(p.vitals, p.inventory, p.hotbar, p.selected);
@@ -660,6 +671,15 @@ export class Game {
     if (this.placeOnSpawn && world.isActive(Math.floor(s.x), Math.floor(s.z))) {
       this.player.respawn();
       this.placeOnSpawn = false;
+    }
+    const bed = this.bed;
+    if (this.bedCheck && bed && world.isActive(bed.x, bed.z)) {
+      this.bedCheck = false;
+      if (world.getId(bed.x, bed.y, bed.z) !== B.BED) {
+        this.bed = null;
+        this.hud.flash('Your bed was missing, so you woke at the world spawn');
+        this.player.respawn();
+      }
     }
   }
 
@@ -945,7 +965,14 @@ export class Game {
   private respawnAfterDeath(): void {
     this.deathScreen.close();
     this.survivor.respawn();
-    this.player.respawn();
+    const bed = this.bed;
+    if (bed) {
+      // On top of the bed; checked once its chunk is loaded (resolveSpawn).
+      this.player.teleport(bed.x + 0.5, bed.y + 0.51, bed.z + 0.5);
+      this.bedCheck = true;
+    } else {
+      this.player.respawn();
+    }
     this.player.body.flying = false;
     this.state = 'playing';
     this.hud.setVisible(true);
@@ -1056,7 +1083,7 @@ export class Game {
   }
 
   private onButton(button: number): void {
-    if (this.state !== 'playing') return;
+    if (this.state !== 'playing' || this.sleep >= 0) return;
     if (button === BUTTON_LEFT && this.attackMob()) return;
     // Survival mining is continuous (see frame()); everything else acts on press.
     if (button === BUTTON_LEFT && this.survivor.survival) return;
@@ -1200,7 +1227,8 @@ export class Game {
       if (value === null) return;
       if (HAS_FACING[id]) value = id | (facingToward(this.player.yaw) << 8);
       const cell = placementTarget(world, hit, normal, id);
-      const changed = placeBlock(world, cell, value, (c, h) => bodyOverlapsCell(this.player.body, c.x, c.y, c.z, h));
+      const overlaps = (c: Cell, h: number): boolean => bodyOverlapsCell(this.player.body, c.x, c.y, c.z, h);
+      const changed = id === B.BED ? placeBed(world, cell, facingToward(this.player.yaw), overlaps) : placeBlock(world, cell, value, overlaps);
       if (changed) {
         surv.consumeHeld();
         this.sound.place(id, centre(changed));
@@ -1273,7 +1301,47 @@ export class Game {
       this.openChest(hit.x, hit.y, hit.z);
       return true;
     }
+    if (id === B.BED) {
+      this.useBed(hit);
+      return true;
+    }
     return false;
+  }
+
+  /** Right click a bed: it becomes the respawn point, and at night the player sleeps till morning. */
+  useBed(cell: Cell): void {
+    const world = this.world;
+    if (!world || world.getId(cell.x, cell.y, cell.z) !== B.BED) return;
+    const foot = bedFoot(cell, world.get(cell.x, cell.y, cell.z));
+    this.bed = { x: foot.x, y: foot.y, z: foot.z };
+    const b = this.player.body;
+    if (!canSleepAt(this.session?.time ?? 6000)) {
+      this.hud.flash('Respawn point set. You can only sleep at night');
+    } else if (monstersNear(this.mobs.list, b.x, b.y, b.z)) {
+      this.hud.flash('Respawn point set. You may not rest now; there are monsters nearby');
+    } else {
+      this.hud.flash('Respawn point set. Sleeping…');
+      this.sleep = 0;
+    }
+  }
+
+  /** Fade out while asleep, then skip to morning; any interruption just wakes. */
+  private updateSleep(dt: number, playing: boolean): void {
+    if (this.sleep >= 0) {
+      if (!playing || this.survivor.dead) {
+        this.sleep = -1;
+      } else {
+        this.sleep += dt;
+        if (this.sleep >= SLEEP_S) {
+          if (this.session) this.session.time = WAKE_TIME;
+          this.sleep = -1;
+          this.wakeFade = 1;
+          this.hud.flash('Good morning');
+        }
+      }
+    }
+    this.wakeFade = Math.max(0, this.wakeFade - dt * 1.5);
+    this.hud.setSleep(this.sleep >= 0 ? Math.min(1, this.sleep / SLEEP_FADE_S) : this.wakeFade);
   }
 
   /** Rebuild the edited chunk right away and refresh the target. */
@@ -1340,7 +1408,7 @@ export class Game {
     if (running && this.collision) {
       this.accumulator += dt;
       while (this.accumulator >= STEP_DT) {
-        this.step(STEP_DT, playing);
+        this.step(STEP_DT, playing && this.sleep < 0);
         this.accumulator -= STEP_DT;
       }
       if (!this.debugMode) {
@@ -1370,9 +1438,12 @@ export class Game {
     const fov = this.settings.fov * (1 + this.fovKick * 0.1) * (1 - this.bowZoom * 0.15);
     if (Math.abs(this.camera.fov - fov) > 0.01) this.camera.fov = fov;
 
+    this.updateSleep(dt, playing);
     this.updateTarget();
     const world = this.world;
-    if (playing && this.input.locked && world) {
+    // Clicks and held buttons act only while playing, awake, with the mouse captured.
+    const acting = playing && this.input.locked && this.sleep < 0;
+    if (acting && world) {
       for (const button of [BUTTON_LEFT, BUTTON_MIDDLE, BUTTON_RIGHT]) {
         if (!this.input.isButtonHeld(button)) continue;
         if (button === BUTTON_LEFT && surv.survival) continue;
@@ -1384,7 +1455,7 @@ export class Game {
       }
     }
     if (world && surv.survival) {
-      const attacking = playing && this.input.locked && this.input.isButtonHeld(BUTTON_LEFT);
+      const attacking = acting && this.input.isButtonHeld(BUTTON_LEFT);
       const aimed = attacking && this.target ? world.get(this.target.x, this.target.y, this.target.z) : B.AIR;
       const broke = surv.updateMining(world, this.items, attacking ? this.target : null, attacking, dt);
       if (broke) {
@@ -1399,7 +1470,7 @@ export class Game {
       } else {
         this.digTimer = 0;
       }
-      const using = playing && this.input.locked && this.input.isButtonHeld(BUTTON_RIGHT);
+      const using = acting && this.input.isButtonHeld(BUTTON_RIGHT);
       if (surv.updateEating(using, dt)) this.hud.flash('Yum!');
       if (surv.eating) {
         this.eatTimer -= dt;
@@ -1416,7 +1487,7 @@ export class Game {
     if (world) {
       // Bows: hold use to draw, let go to shoot. Leaving play cancels the draw.
       if (!playing) surv.drawing = null;
-      const power = surv.updateBow(playing && this.input.locked && this.input.isButtonHeld(BUTTON_RIGHT), dt);
+      const power = surv.updateBow(acting && this.input.isButtonHeld(BUTTON_RIGHT), dt);
       if (power !== null) this.shootArrow(power);
     }
     this.crack.set(surv.mining, surv.mining?.progress ?? 0);

@@ -105,6 +105,8 @@ export interface PlayerRecord {
   /** Survival state; absent for worlds that never ran survival. */
   vitals?: unknown;
   inventory?: unknown;
+  /** Foot cell of the bed the player last used (their respawn point), if any. */
+  bed?: { x: number; y: number; z: number } | null;
 }
 
 export interface WorldRecord {
@@ -138,6 +140,11 @@ function vec(v: unknown): { x: number; y: number; z: number } | null {
   return Number.isFinite(x + y + z) ? { x, y, z } : null;
 }
 
+function cell(v: unknown): { x: number; y: number; z: number } | null {
+  const p = vec(v);
+  return p ? { x: Math.floor(p.x), y: Math.floor(p.y), z: Math.floor(p.z) } : null;
+}
+
 /** Validate a world record read back from storage. Returns null if unusable. */
 export function sanitizeWorldRecord(raw: unknown): WorldRecord | null {
   if (typeof raw !== 'object' || raw === null) return null;
@@ -164,6 +171,8 @@ export function sanitizeWorldRecord(raw: unknown): WorldRecord | null {
         vitals: pr['vitals'],
         inventory: pr['inventory'],
       };
+      const bed = cell(pr['bed']);
+      if (bed) player.bed = bed;
     }
   }
   return {

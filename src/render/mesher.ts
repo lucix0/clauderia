@@ -8,6 +8,7 @@ import { SHADE_BOTTOM, SHADE_TOP, SHADE_X, SHADE_Z } from '../config';
 import {
   ATLAS_TILES_PER_ROW,
   B,
+  BED_HEAD,
   CULL_SAME,
   DEFAULT_FOLIAGE_TINT,
   DEFAULT_GRASS_TINT,
@@ -227,7 +228,8 @@ function setTint(rgb: number): void {
 
 /**
  * One face of a cube-like block. `top` is the block's height (slabs, snow
- * layers); `rotate` turns the texture 90° (logs lying on their side).
+ * layers); `turn` rotates the texture by quarter turns (logs lying on their
+ * side, beds).
  */
 function emitFace(
   buf: QuadBuffer,
@@ -239,7 +241,7 @@ function emitFace(
   shade: number,
   light: number,
   top: number,
-  rotate: boolean,
+  turn: number,
 ): void {
   buf.reserve();
   const q = buf.quads++;
@@ -255,7 +257,6 @@ function emitFace(
   const side = face !== 2 && face !== 3;
   // Partial-height sides show the lower part of the tile.
   if (top < 1 && side) v1 = v0 + (v1 - v0) * top;
-  const turn = rotate ? 1 : 0;
   for (let c = 0; c < 4; c++) {
     const p = q * 12 + c * 3;
     const vy = verts[c * 3 + 1]!;
@@ -307,7 +308,7 @@ function emitSmoothFace(
   front: number,
   blocks: Uint16Array,
   light: Uint8Array,
-  rotate: boolean,
+  turn: number,
 ): void {
   const verts = FACE_VERTS[face]!;
   const [a1, a2] = FACE_AXES[face]!;
@@ -342,7 +343,6 @@ function emitSmoothFace(
   const v0 = TILE_UVS[tile * 4 + 1]!;
   const u1 = TILE_UVS[tile * 4 + 2]!;
   const v1 = TILE_UVS[tile * 4 + 3]!;
-  const turn = rotate ? 1 : 0;
   for (let k = 0; k < 4; k++) {
     const c = flip ? (k + 1) & 3 : k;
     const p = q * 12 + k * 3;
@@ -518,6 +518,9 @@ function emitTorch(buf: QuadBuffer, x: number, y: number, z: number, tile: numbe
   );
 }
 
+/** Face on the other side of the cell: +X ↔ −X, +Y ↔ −Y, +Z ↔ −Z. */
+const OPPOSITE_FACE = [1, 0, 3, 2, 5, 4];
+
 function partialHeight(shape: number): number {
   return shape === SHAPE_SLAB ? 0.5 : shape === SHAPE_LAYER ? 0.125 : 1;
 }
@@ -637,19 +640,28 @@ export function meshSection(pad: PaddedSection): ChunkMeshData {
           if (!faceVisible(id, shape, nb, f)) continue;
           const lightHere = fullBright ? (light[ni]! & 0xf0) | 15 : light[ni]!;
           let tile = FACE_TILES[id * 6 + f]!;
-          let rotate = false;
+          let turn = 0;
           if (axis !== 0) {
             tile = FACE_TILES[id * 6 + (AXIS_END[axis * 6 + f] ? 2 : 0)]!;
-            rotate = AXIS_ROTATE[axis * 6 + f] === 1;
+            turn = AXIS_ROTATE[axis * 6 + f]!;
           } else if (snowy && f !== 2 && f !== 3) {
             tile = T.GRASS_SIDE_SNOW;
+          } else if (id === B.BED) {
+            const state = value >> 8;
+            if (f === 2) {
+              // The top runs from foot to head whichever way the bed faces.
+              tile = state & BED_HEAD ? T.BED_HEAD_TOP : T.BED_FOOT_TOP;
+              turn = state & 3; // one quarter turn per facing step
+            } else if (f !== 3) {
+              tile = f === front ? T.BED_FOOT_END : f === OPPOSITE_FACE[front] ? T.BED_HEAD_END : T.BED_SIDE;
+            }
           } else if (front >= 0 && f !== 2 && f !== 3) {
             tile = f === front ? frontTile(id, value >> 8) : FACE_TILES[id * 6]!;
           }
           if (pad.smooth && top === 1 && !fullBright && !liquid) {
-            emitSmoothFace(buf, f, x, y, z, tile, FACE_BYTES[f]!, ni, blocks, light, rotate);
+            emitSmoothFace(buf, f, x, y, z, tile, FACE_BYTES[f]!, ni, blocks, light, turn);
           } else {
-            emitFace(buf, f, x, y, z, tile, fullBright ? FULL_BYTE : FACE_BYTES[f]!, lightHere, top, rotate);
+            emitFace(buf, f, x, y, z, tile, fullBright ? FULL_BYTE : FACE_BYTES[f]!, lightHere, top, turn);
           }
         }
       }

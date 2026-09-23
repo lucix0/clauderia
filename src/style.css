@@ -690,6 +690,14 @@ kbd {
   }
 }
 
+.sleep-shade {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  background: #05060c;
+  pointer-events: none;
+}
+
 .fire-overlay {
   position: absolute;
   inset: 0;

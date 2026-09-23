@@ -60,6 +60,7 @@ export class Hud {
   private readonly air: HTMLElement;
   private readonly flashEl: HTMLElement;
   private readonly fireEl: HTMLElement;
+  private readonly sleepEl: HTMLElement;
   private labelTimer = 0;
   private toastTimer = 0;
   private lastVitals = '';
@@ -93,9 +94,11 @@ export class Hud {
     this.toast = el('div', { className: 'toast' });
     this.flashEl = el('div', { className: 'hurt-flash' });
     this.fireEl = el('div', { className: 'fire-overlay' });
+    this.sleepEl = el('div', { className: 'sleep-shade' });
     this.root = el('div', { className: 'hud hidden' }, [
       this.flashEl,
       this.fireEl,
+      this.sleepEl,
       el('div', { className: 'crosshair' }),
       this.toast,
       this.label,
@@ -107,6 +110,12 @@ export class Hud {
 
   setVisible(visible: boolean): void {
     this.root.classList.toggle('hidden', !visible);
+  }
+
+  /** Darken the view while sleeping (0 awake … 1 fully dark). */
+  setSleep(amount: number): void {
+    const v = amount.toFixed(3);
+    if (this.sleepEl.style.opacity !== v) this.sleepEl.style.opacity = v;
   }
 
   /** Draw the hotbar (slots 0–8 of the inventory). */

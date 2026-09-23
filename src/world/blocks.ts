@@ -82,10 +82,15 @@ export const T = {
   CHEST_TOP: 87,
   /** Ten mining crack stages (transparent overlays). */
   CRACK_FIRST: 88,
+  BED_HEAD_TOP: 98,
+  BED_FOOT_TOP: 99,
+  BED_SIDE: 100,
+  BED_HEAD_END: 101,
+  BED_FOOT_END: 102,
 } as const;
 
 export const CRACK_STAGES = 10;
-export const TILE_COUNT = T.CRACK_FIRST + CRACK_STAGES;
+export const TILE_COUNT = T.BED_FOOT_END + 1;
 export const ATLAS_TILES_PER_ROW = 16;
 
 /** Block ids. Stored as bytes in the world array. */
@@ -143,9 +148,10 @@ export const B = {
   CRAFTING_TABLE: 65,
   FURNACE: 66,
   CHEST: 67,
+  BED: 68,
 } as const;
 
-export const BLOCK_COUNT = 68;
+export const BLOCK_COUNT = 69;
 
 /**
  * Light-only id for a lit furnace (emits light; never stored in the world).
@@ -397,6 +403,13 @@ const specs: Record<number, BlockSpec> = {
     tiles: [T.CHEST_SIDE, T.CHEST_SIDE, T.CHEST_TOP, T.CHEST_TOP, T.CHEST_FRONT, T.CHEST_SIDE],
     facing: true,
   },
+  // Two cells long: the state holds the facing (the foot end faces it) and a head bit.
+  [B.BED]: {
+    name: 'Bed',
+    tiles: [T.BED_SIDE, T.BED_SIDE, T.BED_FOOT_TOP, T.PLANKS, T.BED_FOOT_END, T.BED_HEAD_END],
+    shape: 'slab',
+    facing: true,
+  },
 };
 for (let i = 0; i < 16; i++) {
   specs[B.WOOL_FIRST + i] = { name: `${WOOL_NAMES[i]} Wool`, tiles: T.WOOL_FIRST + i };
@@ -528,6 +541,17 @@ export function frontTile(id: number, state: number): number {
   if (id === B.FURNACE) return state & FURNACE_LIT ? T.FURNACE_FRONT_LIT : T.FURNACE_FRONT;
   return FACE_TILES[id * 6 + 4]!;
 }
+
+/** Bed state bit: this cell is the head (pillow) half. */
+export const BED_HEAD = 4;
+
+/** Facing state → the (dx, dz) step from a bed's foot to its head (away from the front). */
+export const BED_HEAD_STEP: ReadonlyArray<readonly [number, number]> = [
+  [0, -1],
+  [1, 0],
+  [0, 1],
+  [-1, 0],
+];
 
 /** Facing state that turns a block's front toward a player with view yaw `yaw`. */
 export function facingToward(yaw: number): number {

@@ -407,6 +407,46 @@ try {
     'survival: a bucket scoops up a water source and pours it back',
     JSON.stringify(bucket),
   );
+  // A bed: place it, sleep through the night, and (below) respawn beside it.
+  const bed = await inf.evaluate(async () => {
+    const g = window.__game;
+    const w = g.currentWorld;
+    const b = g.player.body;
+    const x = Math.floor(b.x) + 4;
+    const z = Math.floor(b.z);
+    const y = 100;
+    for (let dx = -2; dx <= 2; dx++) for (let dz = -3; dz <= 3; dz++) w.setBlock(x + dx, y - 1, z + dz, 4);
+    const kept = g.survivor.inventory[0];
+    g.survivor.inventory[0] = { id: 68, count: 1, damage: 0 };
+    g.select(0);
+    g.player.body.flying = true;
+    g.player.teleport(x + 0.5, y + 0.2, z + 2.5);
+    g.player.yaw = 0;
+    g.player.pitch = -Math.atan2(1.82 + 0.2, 2);
+    await g.nextFrame();
+    await g.nextFrame();
+    g.act(2);
+    const placed = { foot: w.get(x, y, z), head: w.get(x, y, z - 1), left: g.survivor.inventory[0]?.count ?? 0 };
+    g.survivor.inventory[0] = kept;
+    g.command('/kill @e');
+    g.command('/time set midnight');
+    g.useBed({ x, y, z: z - 1 });
+    const asleep = g.sleep >= 0;
+    for (let i = 0; i < 300 && g.sleep >= 0; i++) await new Promise((r) => setTimeout(r, 100));
+    const morning = g.session.time;
+    g.command('/time set noon');
+    g.player.body.flying = false;
+    g.setViewpoint({ x: x + 2.5, y: y + 1.8, z: z + 2.2, yaw: 0.75, pitch: -0.5 });
+    return { placed, asleep, morning, spawn: g.bed, x, y, z };
+  });
+  check(
+    bed.placed.foot === 68 && bed.placed.head === (68 | (4 << 8)) && bed.placed.left === 0,
+    'survival: a bed is placed two blocks long',
+    JSON.stringify(bed.placed),
+  );
+  check(bed.asleep && bed.morning === 0 && bed.spawn?.z === bed.z, 'survival: sleeping in the bed skips to morning and sets the respawn point', JSON.stringify(bed));
+  await inf.evaluate(() => window.__game.nextFrame());
+  await inf.screenshot({ path: `${OUT}/survival-bed.png` });
   const death = await inf.evaluate(async () => {
     const g = window.__game;
     const had = g.survivor.inventory.filter(Boolean).length;
@@ -423,7 +463,8 @@ try {
     const wait = (ms) => new Promise((r) => setTimeout(r, ms));
     document.querySelector('.death-screen .btn-primary').click();
     await wait(500);
-    const r = { health: g.survivor.vitals.health, state: g.state, mode: g.command('/gamemode creative') };
+    const at = { x: g.player.body.x, z: g.player.body.z };
+    const r = { health: g.survivor.vitals.health, state: g.state, at, mode: g.command('/gamemode creative') };
     // Back to the unlocked debug view for the rest of the run.
     g.input.exitLock();
     await wait(300);
@@ -432,6 +473,11 @@ try {
     return r;
   });
   check(back.health === 20, 'survival: respawn restores health', JSON.stringify(back));
+  check(
+    Math.abs(back.at.x - (bed.x + 0.5)) < 1 && Math.abs(back.at.z - (bed.z + 0.5)) < 1,
+    'survival: the player respawns at their bed',
+    JSON.stringify({ at: back.at, bed: { x: bed.x, z: bed.z } }),
+  );
 
   // Mobs: every kind lined up for a photo, then a night fight.
   const lineup = await inf.evaluate(async () => {

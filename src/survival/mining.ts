@@ -59,6 +59,7 @@ const TABLE = new Map<number, Hardness>([
   [B.SPONGE, H(0.6)],
   [B.CACTUS, H(0.4)],
   [B.TNT, H(0)],
+  [B.BED, H(0.2)],
 ]);
 for (let i = 0; i < 16; i++) TABLE.set(B.WOOL_FIRST + i, H(0.8));
 

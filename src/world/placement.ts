@@ -1,7 +1,20 @@
 /**
  * Pure break / place / pick rules shared by the player controller and tests.
  */
-import { B, collisionHeight, HAS_AXIS, IS_LIQUID, REPLACEABLE, restsOn, supportsPlant, TORCH_ATTACH } from './blocks';
+import {
+  B,
+  BED_HEAD,
+  BED_HEAD_STEP,
+  collisionHeight,
+  HAS_AXIS,
+  idOf,
+  IS_LIQUID,
+  IS_SOLID,
+  REPLACEABLE,
+  restsOn,
+  supportsPlant,
+  TORCH_ATTACH,
+} from './blocks';
 import type { World } from './world';
 
 export interface Cell {
@@ -21,7 +34,48 @@ export function canBreak(world: World, x: number, y: number, z: number): boolean
 
 export function breakBlock(world: World, x: number, y: number, z: number): boolean {
   if (!canBreak(world, x, y, z)) return false;
-  return world.setBlock(x, y, z, B.AIR);
+  const value = world.get(x, y, z);
+  if (!world.setBlock(x, y, z, B.AIR)) return false;
+  // A bed comes apart as a whole.
+  if (idOf(value) === B.BED) {
+    const other = bedPartner({ x, y, z }, value);
+    if (idOf(world.get(other.x, other.y, other.z)) === B.BED) world.setBlock(other.x, other.y, other.z, B.AIR);
+  }
+  return true;
+}
+
+/** The other half of the bed whose half at `cell` has value `value`. */
+export function bedPartner(cell: Cell, value: number): Cell {
+  const state = value >> 8;
+  const [dx, dz] = BED_HEAD_STEP[state & 3]!;
+  const sign = state & BED_HEAD ? -1 : 1;
+  return { x: cell.x + dx * sign, y: cell.y, z: cell.z + dz * sign };
+}
+
+/** The foot half of the bed with a half at `cell`. */
+export function bedFoot(cell: Cell, value: number): Cell {
+  return (value >> 8) & BED_HEAD ? bedPartner(cell, value) : cell;
+}
+
+/**
+ * Place a bed with its foot at `foot`, stretching away from the player
+ * (`facing` turns the foot end toward them). Both cells must be free and
+ * on solid ground. Returns the foot cell, or null.
+ */
+export function placeBed(world: World, foot: Cell, facing: number, overlapsPlayer: (cell: Cell, height: number) => boolean): Cell | null {
+  const footValue = B.BED | ((facing & 3) << 8);
+  const head = bedPartner(foot, footValue);
+  for (const c of [foot, head]) {
+    if (!world.inBounds(c.x, c.y, c.z) || !isReplaceable(world.getId(c.x, c.y, c.z))) return null;
+    if (!IS_SOLID[world.getId(c.x, c.y - 1, c.z)]) return null;
+    if (overlapsPlayer(c, collisionHeight(B.BED))) return null;
+  }
+  if (!world.setBlock(foot.x, foot.y, foot.z, footValue)) return null;
+  if (!world.setBlock(head.x, head.y, head.z, footValue | (BED_HEAD << 8))) {
+    world.setBlock(foot.x, foot.y, foot.z, B.AIR);
+    return null;
+  }
+  return foot;
 }
 
 /** Cells that can be overwritten by placing a block (air, liquids, tall grass, snow layers). */

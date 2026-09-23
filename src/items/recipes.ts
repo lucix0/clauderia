@@ -28,6 +28,7 @@ export const TAGS: Readonly<Record<string, readonly number[]>> = {
   planks: [B.PLANKS, B.SPRUCE_PLANKS, B.BIRCH_PLANKS],
   logs: [B.LOG, B.SPRUCE_LOG, B.BIRCH_LOG],
   coals: [I.COAL, I.CHARCOAL],
+  wool: Array.from({ length: 16 }, (_, i) => B.WOOL_FIRST + i),
 };
 
 export function ingredientMatches(ing: Ingredient, id: number): boolean {
@@ -80,6 +81,7 @@ export const RECIPES: readonly Recipe[] = [
   // No birds here, so arrows are fletched with nothing but a flint head.
   shaped(['F', 'S'], { F: I.FLINT, S: I.STICK }, out(I.ARROW, 4)),
   shaped([' SX', 'S X', ' SX'], { S: I.STICK, X: I.STRING }, out(I.BOW)),
+  shaped(['WWW', 'PPP'], { W: '#wool', P: '#planks' }, out(B.BED)),
   ...(Object.keys(TOOL_PATTERNS) as ToolKind[]).flatMap((kind) =>
     TIERS.map((_, t) => shaped(TOOL_PATTERNS[kind], { X: TIER_MATERIAL[t]!, S: I.STICK }, out(toolId(kind, t)))),
   ),

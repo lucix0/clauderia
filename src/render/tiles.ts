@@ -572,6 +572,62 @@ function chest(t: Tile, rng: Rng, part: 'front' | 'side' | 'top'): void {
   }
 }
 
+const QUILT = hex('#b8412e');
+const QUILT_STITCH = hex('#d27352');
+const SHEET = hex('#ece6d6');
+
+/** Quilted blanket with diagonal stitching, over rows y0…y1. */
+function quilt(t: Tile, rng: Rng, y0: number, y1: number): void {
+  for (let y = y0; y <= y1; y++) {
+    for (let x = 0; x < 16; x++) {
+      const stitch = (x + y) % 8 === 0 || (x - y + 64) % 8 === 0;
+      t.set(x, y, stitch ? scale(QUILT_STITCH, 0.95 + rng.next() * 0.1) : scale(QUILT, 0.92 + rng.next() * 0.12));
+    }
+  }
+}
+
+/**
+ * Bed tiles. Tops run from the head (image top) to the foot (image bottom);
+ * sides are half height, so only rows 8–15 show.
+ */
+function bed(t: Tile, rng: Rng, part: 'headTop' | 'footTop' | 'side' | 'headEnd' | 'footEnd'): void {
+  const frame = ['#8a6436', '#94703e', '#7e5a30'];
+  switch (part) {
+    case 'headTop':
+      t.fill(SHEET);
+      for (let y = 0; y < 16; y++) for (let x = 0; x < 16; x++) t.set(x, y, scale(SHEET, 0.94 + rng.next() * 0.06));
+      // A plump pillow, shaded toward its edges.
+      for (let y = 1; y <= 6; y++) {
+        for (let x = 2; x <= 13; x++) {
+          const edge = y === 1 || y === 6 || x === 2 || x === 13;
+          t.set(x, y, scale(hex('#fbf8f0'), edge ? 0.86 : 0.97 + rng.next() * 0.04));
+        }
+      }
+      quilt(t, rng, 10, 15);
+      for (let x = 0; x < 16; x++) t.set(x, 10, scale(QUILT, 1.18)); // folded-back edge
+      break;
+    case 'footTop':
+      quilt(t, rng, 0, 15);
+      for (let x = 0; x < 16; x++) t.set(x, 15, scale(QUILT, 0.7)); // hem at the foot
+      break;
+    case 'side':
+    case 'headEnd':
+    case 'footEnd': {
+      planks(t, rng, frame, '#5a3a14');
+      if (part === 'headEnd') {
+        // A taller headboard: plain frame with the sheet peeking over.
+        for (let x = 1; x < 15; x++) t.set(x, 8, scale(SHEET, 0.9));
+      } else {
+        quilt(t, rng, 8, 11);
+        for (let x = 0; x < 16; x++) t.set(x, 12, scale(QUILT, 0.65));
+      }
+      // Legs at the corners, shadow between them.
+      for (let y = 14; y < 16; y++) for (let x = 3; x < 13; x++) t.set(x, y, hex('#2a1c0e'));
+      break;
+    }
+  }
+}
+
 /** Crack overlay stage `n` (0–9): dark lines on transparent. */
 function crack(t: Tile, n: number): void {
   t.clear();
@@ -1043,6 +1099,11 @@ export function paintTile(id: number): Uint8ClampedArray<ArrayBuffer> {
     case T.CHEST_FRONT: chest(t, rng, 'front'); break;
     case T.CHEST_SIDE: chest(t, rng, 'side'); break;
     case T.CHEST_TOP: chest(t, rng, 'top'); break;
+    case T.BED_HEAD_TOP: bed(t, rng, 'headTop'); break;
+    case T.BED_FOOT_TOP: bed(t, rng, 'footTop'); break;
+    case T.BED_SIDE: bed(t, rng, 'side'); break;
+    case T.BED_HEAD_END: bed(t, rng, 'headEnd'); break;
+    case T.BED_FOOT_END: bed(t, rng, 'footEnd'); break;
     default:
       if (id >= T.WOOL_FIRST && id < T.WOOL_FIRST + 16) wool(t, rng, WOOL_COLORS[id - T.WOOL_FIRST]!);
       else if (id >= T.CRACK_FIRST && id < T.CRACK_FIRST + CRACK_STAGES) crack(t, id - T.CRACK_FIRST);

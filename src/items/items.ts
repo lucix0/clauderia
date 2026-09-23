@@ -124,7 +124,7 @@ const BLOCK_FUEL: Record<number, number> = {
 };
 for (let id = 1; id < BLOCK_COUNT; id++) {
   if (!isValidBlock(id)) continue;
-  add({ id, name: BLOCKS[id]!.name, block: true, fuel: BLOCK_FUEL[id] ?? 0 });
+  add({ id, name: BLOCKS[id]!.name, block: true, fuel: BLOCK_FUEL[id] ?? 0, maxStack: id === B.BED ? 1 : 64 });
 }
 
 add({ id: I.STICK, name: 'Stick', fuel: 100 });

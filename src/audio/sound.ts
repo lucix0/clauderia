@@ -48,6 +48,7 @@ export function materialOf(id: number): Material {
     case B.SNOW_LAYER:
       return 'snow';
     case B.SPONGE:
+    case B.BED:
       return 'cloth';
     case B.IRON_BLOCK:
     case B.GOLD_BLOCK:
